@@ -1,0 +1,16 @@
+[package]
+name = "pmpx-plugin-fakepm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 单元素 workspace：它住在 pmpx 的目录树里，但不是它的成员（工作区只收 `crates/*`）。
+[workspace]
+
+[lib]
+name = "pmpx_plugin_fakepm"
+crate-type = ["cdylib"]
+
+[dependencies]
+# tests/fixtures/fake-plugin/ → crates/pmpx-plugin/
+pmpx-plugin = { path = "../../../../pmpx-plugin" }

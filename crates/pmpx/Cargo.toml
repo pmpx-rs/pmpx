@@ -1,0 +1,44 @@
+[package]
+name = "pmpx"
+# 描述里不要出现"支持哪几个生态"—— 后端可插拔才是这个工具本身。
+# 括号里的 cargo / pnpm 是**例子**，不界定范围。
+description = "One command surface for a project's package managers. Detects the project type, routes the verb, and spawns the real tool (cargo, pnpm, ...)."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["cli", "package-manager", "cargo", "npm", "pnpm"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "pmpx"
+path = "src/main.rs"
+
+[dependencies]
+# 契约 crate（工作区内 path 依赖）。
+pmpx-plugin.workspace = true
+
+# 通用插件管理库：装卸 / 加载 / 跨进程锁 / 缓存。外部依赖，按版本消费。
+crate-plugin-kit.workspace = true
+
+clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+# anyhow 负责内部传播；thiserror 只用在需要携带退出码的边界类型上。
+anyhow = "1"
+thiserror = "2"
+
+# 跨平台路径。不硬编码 ~/.config —— macOS 与 Windows 都不是那个位置。
+directories = "6"
+
+# 解析后端的真实路径。Windows 上 `Command::new("pnpm")` 会失败，因为
+# CreateProcessW 不做 PATHEXT 解析，而 pnpm 装出来是 `pnpm.cmd`。
+which = "8"
+
+[dev-dependencies]
+tempfile = "3"
+# 集成测试用 `find_library` 按平台规则在产物目录里找 cdylib。
+crate-plugin-kit.workspace = true

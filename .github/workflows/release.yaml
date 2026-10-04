@@ -1,0 +1,59 @@
+name: Release
+
+# 发布不可逆：crate 名 + 版本号发出去就永远不能复用，yank 也撤不回来。
+# 所以这里的选择是「拒绝」而不是「猜」，而且失败之后可以安全重跑 ——
+# "这个版本已经在 registry 上了"算完成，不算错误。
+#
+# 检查放在 ci.yaml 里由这里调用，这样顺序是结构性的（同一次运行里的 needs），
+# 而不是靠两个 workflow 的时序去凑。
+
+on:
+  push:
+    # 唯一的触发器。没有别的东西能启动一次运行，也就没有别的东西能碰到 registry。
+    tags: [ "v*.*.*" ]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/ci.yaml
+
+  publish:
+    name: Publish to crates.io
+    needs: [ checks ]
+    runs-on: ubuntu-latest
+    # 不声明 `environment:`：那会把 secret 挪进 environment 作用域，并要求它在首次
+    # 运行前就存在。token 直接从仓库的 Secrets 读；将来要加人工审批再加回来。
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      # 不用 rust-cache：这个 job 没有值得缓存的依赖，`cargo publish` 的验证几秒就完。
+      - name: Install the release tool
+        run: cargo install harbor --locked
+
+      # 一条命令查三件事：tag 名与 manifest 版本一致、registry token 存在且非空、
+      # 发布计划算得出来。三条都成立之前什么都不会上传。
+      #
+      # token 只走环境变量，不作为命令行参数 —— cargo 会回显命令行，那样它会进日志。
+      - name: Check the release before starting it
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo harbor check --plan "$GITHUB_REF_NAME"
+
+      # 发布顺序由 `check --plan` 从依赖图算出来，不在这里手写 ——
+      # 手写的顺序会过期，而过期的那一刻 registry 已经被写了一半。
+      # harbor publish 按计划逐个发，依赖还没进索引时重试，"版本已在 registry 上"
+      # 当作已完成（所以重跑能补完一次半途失败的发布），其它错误立刻停。
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo harbor publish

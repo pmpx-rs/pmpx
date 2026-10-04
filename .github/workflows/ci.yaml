@@ -1,0 +1,265 @@
+name: Checks
+
+# release 必须先过的检查。这个文件**没有自己的触发器**：唯一能跑它的方式是从
+# release.yaml 调用它。
+#
+# 这就是让「检查没过就不发布」成为**结构性**保证、而不是靠时序去凑的原因。
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# workflow 自己的 `env` **不会**传给它调用的 workflow，所以这里也声明一遍。
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    # 这个工作区做的是**跨动态库边界**的事：`dlopen`/`dlsym`、平台相关的库文件名、
+    # 以及"panic 不许穿过 extern \"C\""这类行为在三个平台上不完全一样
+    # （Abort/Unwind 的落点、符号导出的默认可见性）。所以三个平台都跑。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # 这个仓库刻意没有 `rust-toolchain.toml`：钉死的 channel 会盖过下面 msrv job 的
+      # `cargo +<msrv>`，而 `rust-version` 才是承诺，由那个 job 兑现。
+      - name: Install stable toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # 包括两个集成测试：`shim.rs` 按 ABI 直接驱动生成的外壳；
+      # `cdylib.rs` 真的编出一个 cdylib，再用 crate-plugin-kit 加载它。
+      - name: Test
+        run: cargo test --locked
+
+      - name: Docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --locked
+
+      # `pmpx-plugin` 承诺**零依赖**。这是它对这个生态最重要的一个承诺：
+      # 它多一个依赖，每一个插件作者就多一个；它的 MSRV 抬高一次，能写插件的人就少一批。
+      #
+      # 没有这道闸，它就只是 Cargo.toml 里的一句注释 —— 而"顺手引个 once_cell 吧"
+      # 这种事不会有人发现。
+      #
+      # 只看 normal 边：dev-dependencies（集成测试用的 crate-plugin-kit）与
+      # build-dependencies **对插件作者不存在**，不该算进这个承诺里。
+      - name: pmpx-plugin must stay dependency-free
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deps=$(cargo tree -p pmpx-plugin -e normal --prefix none 2>/dev/null \
+            | awk '{print $1}' | sort -u | grep -vx 'pmpx-plugin' || true)
+          if [ -n "$deps" ]; then
+            echo "::error::pmpx-plugin 承诺零依赖，但普通依赖树里出现了："
+            echo "$deps"
+            exit 1
+          fi
+          echo "pmpx-plugin 零普通依赖"
+
+      # 「全栈零 async runtime」是 README 与设计说明里写下的承诺（决策 31）。
+      # 没有这道闸，它就只是一句话 —— 某个依赖顺手把 tokio 拖进来，谁都不会发现。
+      #
+      # 跨 `dlopen` 边界传 `Future` 是这套方案里最脆的地方，而整套设计正建立在
+      # "边界上只有 POD"之上。这条承诺值得一道闸。
+      - name: No async runtime anywhere
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          names=$(cargo tree --workspace --prefix none 2>/dev/null | awk '{print $1}' | sort -u)
+          offenders=$(printf '%s\n' "$names" \
+            | grep -xE 'tokio|async-std|smol|async-io|async-executor|async-global-executor' \
+            || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::这个工作区承诺零 async runtime，但依赖树里出现了："
+            echo "$offenders"
+            exit 1
+          fi
+          echo "依赖树里没有任何 async runtime"
+
+      # 每个 crate 单独打包验证 —— `cargo package` 才是发布时真正会做的事，
+      # 它能抓到"忘了写 version"或"依赖没发布"这类只有发布路径才会暴露的问题。
+      #
+      # 两个都要打，而且**顺序有讲究**：
+      #
+      # `pmpx` 依赖 `pmpx-plugin`（同一个 workspace，`path` + `version`）。
+      # 打包时 cargo 会把 `path` 去掉、只留版本，于是 `pmpx` 那一步解析的是
+      # **registry 上那个** `pmpx-plugin`，不是本地这份。
+      #
+      # 这有个副作用值得知道：改了本地的 `pmpx-plugin` 却没 bump 版本时，
+      # `-p pmpx` 验证的仍是已发布的旧版本 —— 那是**假绿**。
+      # 所以先打 `pmpx-plugin`：它会在版本对不上时先炸。
+      - name: Package
+        if: runner.os == 'Linux'
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package-target
+        run: |
+          set -euo pipefail
+          cargo package -p pmpx-plugin --locked
+          cargo package -p pmpx --locked
+
+  # ---------------------------------------------------------------------------
+  # MSRV。
+  #
+  # `pmpx-plugin` 是**插件作者**要依赖的东西，它的 MSRV 决定了谁能写插件。
+  # 现在写的是 1.82（`#[unsafe(no_mangle)]` 的最低版本 —— 那是宏必须用的写法，
+  # 因为 `#[no_mangle]` 在 edition 2024 里是硬错误）。
+  # ---------------------------------------------------------------------------
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read rust-version from the contract crate
+        id: msrv
+        run: |
+          set -euo pipefail
+          version=$(python3 -c '
+          import tomllib
+          with open("crates/pmpx-plugin/Cargo.toml", "rb") as f:
+              print(tomllib.load(f)["package"]["rust-version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "MSRV is $version"
+
+      - name: Install MSRV toolchain
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          rustup default "${{ steps.msrv.outputs.version }}"
+
+      # 刻意**不**在这里跑 `cargo build --all-targets`。
+      #
+      # pmpx-plugin 的 dev-dependencies（集成测试用的 crate-plugin-kit）自己要求 1.85+，
+      # 而 dev-dependencies **对插件作者根本不存在**。在这里跑全目标构建，测的是
+      # "本仓库的测试套能不能在 MSRV 上跑"，而不是 MSRV 真正承诺的事。
+      #
+      # 真正该验的是：**一个用着 1.82 的插件作者，能不能构建他的插件。**
+      # 所以造一个他那样的 crate —— 放在工作区**之外**，因此看不到那些 dev-dependencies。
+      - name: Build a minimal consumer on the MSRV
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/msrv-probe"
+          mkdir -p "$probe/src"
+
+          cat > "$probe/Cargo.toml" <<EOF
+          [package]
+          name    = "msrv-probe"
+          version = "0.0.0"
+          edition = "2021"
+
+          # 单元素 workspace：隔离出去，这样它看不到 pmpx-plugin 的 dev-dependencies
+          [workspace]
+
+          [lib]
+          crate-type = ["cdylib"]
+
+          [dependencies]
+          pmpx-plugin = { path = "$GITHUB_WORKSPACE/crates/pmpx-plugin" }
+          EOF
+
+          cat > "$probe/src/lib.rs" <<'EOF'
+          use std::ffi::OsString;
+          use pmpx_plugin::{CommandSpec, Context, Family, PackageManager, PluginError, Verb};
+
+          pub struct Probe;
+
+          impl PackageManager for Probe {
+              fn name(&self) -> &str { "probe" }
+              fn family(&self) -> Family { Family::RUST }
+              fn command(&self, _ctx: &Context, _verb: Verb, _args: &[OsString])
+                  -> Result<CommandSpec, PluginError> {
+                  Ok(CommandSpec::new("probe"))
+              }
+          }
+
+          pub fn create() -> Box<dyn PackageManager> { Box::new(Probe) }
+          pmpx_plugin::export!(create);
+          EOF
+
+          # cdylib 而不是普通 lib：`#[unsafe(no_mangle)]` 与导出符号要真的过一遍链接。
+          cargo build --manifest-path "$probe/Cargo.toml" --release
+          ls -la "$probe/target/release" | grep -E 'probe' || true
+
+  # ---------------------------------------------------------------------------
+  # 跨工具链。
+  #
+  # 「宿主与插件不需要同一个 rustc」是选 C ABI 而不是 Rust trait 的**全部理由**。
+  # 没有这个 job，它就只是文档里的一句话 —— 而它恰好是整份方案里最该被压过的那块地基。
+  #
+  # 做法：插件用契约 crate 的 MSRV 编，宿主（及其全部依赖）用 stable 编，
+  # 让 stable 的宿主去 dlopen 那个旧工具链产出的 cdylib。两端差距拉到最大。
+  # ---------------------------------------------------------------------------
+  cross-toolchain:
+    name: Cross-toolchain load
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the contract crate's MSRV
+        id: msrv
+        run: |
+          set -euo pipefail
+          version=$(python3 -c '
+          import tomllib
+          with open("crates/pmpx-plugin/Cargo.toml", "rb") as f:
+              print(tomllib.load(f)["package"]["rust-version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install both toolchains
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          rustup default stable
+          echo "host   : $(cargo --version)"
+          echo "plugin : $(cargo +${{ steps.msrv.outputs.version }} --version)"
+
+      # 插件这一侧只依赖 pmpx-plugin（零依赖），所以旧工具链编得动。
+      - name: Build the plugin with the MSRV toolchain
+        run: |
+          set -euo pipefail
+          cargo "+${{ steps.msrv.outputs.version }}" build --release \
+            --manifest-path crates/pmpx-plugin/tests/fixtures/toy-plugin/Cargo.toml \
+            --target-dir "$RUNNER_TEMP/plugin-target"
+          ls -la "$RUNNER_TEMP/plugin-target/release" | grep pmpx_plugin_toy
+
+      # `PMPX_TEST_PREBUILT_LIB` 让 cdylib 那个 e2e 测试跳过编译、直接用现成的产物。
+      # 于是同一套断言跑在**两个不同 rustc** 造出来的物件上。
+      #
+      # 这个 job 只跑 ubuntu，所以 .so 的路径可以写死。
+      - name: Drive it from a stable-built host
+        env:
+          PMPX_TEST_PREBUILT_LIB: ${{ runner.temp }}/plugin-target/release/libpmpx_plugin_toy.so
+        run: cargo test --locked --test cdylib
+
+      - name: Record what was actually verified
+        run: |
+          set -euo pipefail
+          echo "plugin built by : $(cargo +${{ steps.msrv.outputs.version }} --version)"
+          echo "host built by   : $(cargo --version)"
+          echo "→ 一个用 ${{ steps.msrv.outputs.version }} 编出的 cdylib，被 stable 编出的宿主"
+          echo "  加载、跨边界调用、并安全兜住了一次 panic。"

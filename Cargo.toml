@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version    = "0.0.0"
+edition    = "2021"
+license    = "MIT"
+repository = "https://github.com/pmpx-rs/pmpx"
+# 工作区地板是 1.88（`pmpx` 依赖 crate-plugin-kit，后者要 1.88）。
+# `pmpx-plugin` 不继承它 —— 那个 crate 自己声明 1.82，因为它的 MSRV 决定了谁能写插件。
+rust-version = "1.88"
+
+[workspace.dependencies]
+# 同时写 path 和 version：发布时路径会被剥掉，只留版本，所以 version 是硬性要求，
+# 且必须与 [workspace.package] version 一模一样。
+pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.0.0" }
+
+# 通用插件管理库。外部依赖，按版本消费，不走 path。
+crate-plugin-kit = "0.1.1"
+
+[profile.release]
+# 一律偏向「运行快」，构建慢无所谓。
+lto           = "fat"
+codegen-units = 1
+opt-level     = 3
+strip         = "symbols"
+# 不能用 panic = "abort"：插件的 panic 必须能被 catch_unwind 拦住。
+panic         = "unwind"

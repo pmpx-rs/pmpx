@@ -1,0 +1,15 @@
+/target
+
+# 集成测试的 fixture 是**就地**编译的（它对被测 crate 有路径依赖，复制出去就断了），
+# 所以 cargo 会在它旁边留下一个 lockfile。产物本身被 --target-dir 引到临时目录了。
+crates/*/tests/fixtures/*/Cargo.lock
+crates/*/tests/fixtures/*/target
+
+# IDE
+/.idea
+/.vscode/*.log
+*.swp
+
+# Scratch
+/.scratch
+*.tmp

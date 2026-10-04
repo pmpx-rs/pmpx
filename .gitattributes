@@ -1,0 +1,9 @@
+# 统一 LF。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png   binary
+*.ico   binary
+*.dll   binary
+*.so    binary
+*.dylib binary
