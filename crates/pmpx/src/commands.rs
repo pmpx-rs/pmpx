@@ -12,7 +12,7 @@ use clap::CommandFactory;
 use pmpx_plugin::Family;
 
 use crate::app::{self, Session};
-use crate::cli::{Cli, Command, ConfigCommand, PluginCommand};
+use crate::cli::{Cli, Command, ConfigCommand, PluginCommand, SelfCommand};
 use crate::config::ProjectConfig;
 use crate::detect::{self, FamilyScore, ScoredPlugin};
 use crate::error::{PmpxError, EXIT_OK};
@@ -59,6 +59,7 @@ pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
         Command::Plugin(sub) => plugin_cmd(args, sub),
         Command::Config(sub) => config_cmd(sub),
         Command::Completion { shell } => completion(*shell),
+        Command::SelfTool { command } => self_cmd(command),
     }
 }
 
@@ -974,6 +975,28 @@ fn render_value(v: &toml::Value) -> String {
     match v {
         toml::Value::String(s) => s.clone(),
         other => other.to_string().trim().to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// self
+// ---------------------------------------------------------------------------
+
+/// `pmpx self update`: the one command that writes pmpx's own binary.
+///
+/// It deliberately does not open a [`Session`]: updating must work when the plugin store
+/// or the project configuration is what is broken.
+fn self_cmd(cmd: &SelfCommand) -> crate::error::Result<u8> {
+    match cmd {
+        SelfCommand::Update {
+            check,
+            version,
+            force,
+        } => crate::selfupdate::run(&crate::selfupdate::Request {
+            check: *check,
+            version: version.clone(),
+            force: *force,
+        }),
     }
 }
 

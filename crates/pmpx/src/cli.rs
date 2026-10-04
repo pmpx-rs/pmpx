@@ -127,6 +127,35 @@ pub enum Command {
         #[arg(value_name = "SHELL")]
         shell: clap_complete::Shell,
     },
+
+    /// Manage pmpx itself
+    #[command(name = "self")]
+    SelfTool {
+        #[command(subcommand)]
+        command: SelfCommand,
+    },
+}
+
+/// `pmpx self <...>`
+#[derive(Debug, Subcommand)]
+pub enum SelfCommand {
+    /// Replace this binary with one of the project's releases
+    ///
+    /// Only for installations that are not managed by cargo; a `cargo install` is told to
+    /// run `cargo install pmpx --force` instead.
+    Update {
+        /// Report what is available and change nothing
+        #[arg(long)]
+        check: bool,
+
+        /// Install this version instead of the newest one; also how a rollback is done
+        #[arg(long, value_name = "VERSION")]
+        version: Option<String>,
+
+        /// Reinstall even when this version is already the one running
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 /// `pmpx plugin <...>`

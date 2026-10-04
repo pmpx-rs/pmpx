@@ -28,12 +28,19 @@ mod error;
 mod hints;
 mod plugins;
 mod runtime;
+mod selfupdate;
 mod spawn;
 mod style;
 
 use clap::Parser;
 
 fn main() -> std::process::ExitCode {
+    // The only thing that happens before the arguments are parsed. On Windows an update
+    // cannot delete the binary it replaced while that binary is still running, so the
+    // leftover `.old` is deleted on the next start instead -- silently, because a failure
+    // only means "next time". It compiles to nothing on other platforms.
+    selfupdate::cleanup_stale_old();
+
     let args = cli::Cli::parse();
     let code = dispatch(&args);
     std::process::ExitCode::from(code)

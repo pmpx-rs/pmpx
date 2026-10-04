@@ -37,6 +37,7 @@ $ pmpx                          # what is this directory, and which tool will ru
 ## Contents
 
 - [Install](#install)
+- [Updating](#updating)
 - [Usage](#usage)
 - [How it picks a backend](#how-it-picks-a-backend)
 - [Configuration](#configuration)
@@ -58,6 +59,27 @@ The binary is named `pmpx`.
 - Rust **1.88+** to build.
 - **At least one plugin.** `pmpx` detects nothing without one — that is deliberate, see
   [Writing a plugin](#writing-a-plugin).
+
+## Updating
+
+```console
+$ pmpx self update --check         # what is available; changes nothing
+$ pmpx self update                 # replace this binary with the newest release
+$ pmpx self update --version 0.1.0 # or a specific one, which is also how you roll back
+```
+
+Only installations that cargo does not manage can do this. `cargo install` keeps its own
+record of what it put on disk, so a pmpx installed that way is told to run
+`cargo install pmpx --force` instead — replacing the file behind cargo's back would make
+`cargo install --list` disagree with reality.
+
+The download is checked against the release's `SHA256SUMS` before anything is replaced; a
+mismatch stops there and leaves the running binary alone. That is **not a signature**: the
+checksum file and the archive come from the same place, so it proves the bytes arrived
+intact, not who built them.
+
+Nothing is ever checked automatically — no background check, no "a new version is
+available" banner on startup.
 
 ## Usage
 
@@ -88,7 +110,7 @@ Global flags:
 | `-q, --quiet` | suppress the hints on stderr |
 
 Other commands: `pmpx info`, `pmpx plugin ls|current|set|unset|add|rm|update|search|info`,
-`pmpx config get|set`, `pmpx completion <shell>`.
+`pmpx config get|set`, `pmpx completion <shell>`, `pmpx self update`.
 
 ### Exit codes
 

@@ -46,6 +46,22 @@ directories = "6"
 # CreateProcessW does not do PATHEXT resolution, and pnpm installs as `pnpm.cmd`.
 which = "8"
 
+# `pmpx self update` fetches a release over HTTPS, reads GitHub's JSON, and verifies the
+# archive against SHA256SUMS. All three are already compiled into every pmpx binary --
+# crate-plugin-kit uses ureq (and therefore rustls, which hashes with ring) to talk to
+# crates.io, and serde_json to read `cargo metadata` -- so declaring them here makes what
+# is already in the graph usable from this crate instead of adding to it.
+ureq = "3"
+serde_json = "1"
+ring = "0.17"
+
+# Reading the two archive shapes a release publishes. Both are used read-only and with
+# everything switched off that this does not need: `tar` without xattr, `zip` without
+# every codec except the deflate it shares with the flate2 already in the tree.
+tar = { version = "0.4", default-features = false }
+zip = { version = "5", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
+
 [dev-dependencies]
 tempfile = "3"
 # Integration tests use `find_library` to find the cdylib in the artifact directory

@@ -32,6 +32,7 @@ $ pmpx                          # 这个目录是什么？会跑哪个工具？
 ## 目录
 
 - [安装](#安装)
+- [更新](#更新)
 - [用法](#用法)
 - [它怎么决定用哪个后端](#它怎么决定用哪个后端)
 - [配置](#配置)
@@ -53,6 +54,24 @@ cargo install pmpx
 - Rust **1.88+** 用于构建。
 - **至少一个插件。** 没有插件时 `pmpx` 什么也检测不出来 —— 这是刻意的，见
   [写一个插件](#写一个插件)。
+
+## 更新
+
+```console
+$ pmpx self update --check         # 看看有没有新版，什么都不改
+$ pmpx self update                 # 把当前二进制换成最新 release
+$ pmpx self update --version 0.1.0 # 或指定版本，这也是回滚的方式
+```
+
+只有**不是 cargo 装的**安装才能自更新。`cargo install` 自己记着它放了什么到磁盘上，
+绕过它去替换文件会让 `cargo install --list` 与实际不符 —— 所以这类安装会被要求执行
+`cargo install pmpx --force`。
+
+替换之前会先拿 release 里的 `SHA256SUMS` 校验下载内容；不一致就停在那里，正在运行的
+二进制原样不动。但要清楚这**不是签名**：校验文件和压缩包来自同一个地方，它只能证明字节
+完整送达，不能证明是谁构建的。
+
+**不会自动检查**：没有后台轮询，也没有启动时的"有新版本"提示。
 
 ## 用法
 
@@ -83,7 +102,7 @@ $ pmpx run dev -- --port 3000
 | `-q, --quiet` | 关掉 stderr 上的提示 |
 
 其它命令：`pmpx info`、`pmpx plugin ls|current|set|unset|add|rm|update|search|info`、
-`pmpx config get|set`、`pmpx completion <shell>`。
+`pmpx config get|set`、`pmpx completion <shell>`、`pmpx self update`。
 
 ### 退出码
 
