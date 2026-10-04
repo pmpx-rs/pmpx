@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# 单元素 workspace：它住在 pmpx 的目录树里，但不是它的成员（工作区只收 `crates/*`）。
+# Single-element workspace: it lives inside pmpx's directory tree but is not a member of it
+# (the workspace only takes `crates/*`).
 [workspace]
 
 [lib]

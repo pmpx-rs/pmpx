@@ -1,4 +1,5 @@
-//! 把各层接起来：一次运行的上下文，以及从 argv 到"跑一条命令"的完整流程。
+//! Wires the layers together: the context of one run, and the whole flow from argv to
+//! "run one command".
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -17,37 +18,39 @@ use crate::plugins::PluginSet;
 use crate::runtime::{Backend, BackendError};
 use crate::spawn;
 
-/// 一次运行的全部上下文。一次运行读一次配置。
+/// The whole context of one run. One run reads the config once.
 ///
-/// 没有"按需读"的空间：`[discovery]` 影响所有命令，包括那些看起来跟插件无关的。
+/// There is no room for "read on demand": `[discovery]` affects every command, including
+/// the ones that look unrelated to plugins.
 pub struct Session {
-    /// 起点目录（`-C` 指定的，或 cwd）。
+    /// Start directory (what `-C` gave, or cwd).
     pub start_dir: PathBuf,
-    /// 全局配置。
+    /// Global config.
     pub global: GlobalConfig,
-    /// 合并后的项目配置（多层 `.pmpx.toml`）。
+    /// Merged project config (several layers of `.pmpx.toml`).
     pub project: MergedProjectConfig,
-    /// 已安装插件的清单（只读 manifest，没有 dlopen）。
+    /// Manifest list of installed plugins (manifest reads only, no dlopen).
     pub plugins: PluginSet,
-    /// 插件库句柄。
+    /// Plugin library handle.
     pub kit: CratePluginKit<PmpxPluginV1>,
-    /// 上溯走过的目录与停止原因。
+    /// The directories walk-up visited and why it stopped.
     pub walk: Walk,
-    /// 项目根。在 `open` 里就算好 —— 它是"在哪执行"的唯一答案，不每次重算。
+    /// The project root. Computed in `open` -- it is the single answer to "where do we
+    /// run", not recomputed every time.
     pub project_root: Option<PathBuf>,
-    /// `-p/--plugin` 的值。
+    /// The value of `-p/--plugin`.
     pub wanted_plugin: Option<String>,
-    /// `--quiet`：关掉 stderr 上的提示。
+    /// `--quiet`: turns off the notes on stderr.
     pub quiet: bool,
 }
 
 impl Session {
-    /// 读配置、扫插件、走上溯。不选插件，也不加载任何代码。
+    /// Read config, scan plugins, walk up. Selects no plugin and loads no code.
     pub fn open(args: &Cli) -> Result<Self> {
         let start_dir = resolve_start_dir(args.dir.as_deref())?;
         let global = GlobalConfig::load()?;
 
-        // `--no-walk-up` 只能收紧 `[discovery] walk_up`，不能放宽。
+        // `--no-walk-up` can only tighten `[discovery] walk_up`, never loosen it.
         let mut discovery_cfg = global.discovery.clone();
         if args.no_walk_up {
             discovery_cfg.walk_up = false;
@@ -57,8 +60,12 @@ impl Session {
         let mut kit_cfg = KitConfig::new("pmpx").with_data_dir(&data_dir);
 
         kit_cfg.prefer_prebuilt = global.plugin_store.effective_prefer_prebuilt();
-        let kit = CratePluginKit::<PmpxPluginV1>::new(kit_cfg)
-            .with_context(|| format!("初始化插件库失败：{}", data_dir.display()))?;
+        let kit = CratePluginKit::<PmpxPluginV1>::new(kit_cfg).with_context(|| {
+            format!(
+                "failed to initialise the plugin store: {}",
+                data_dir.display()
+            )
+        })?;
 
         let plugins = PluginSet::load(&kit)?;
 
@@ -67,7 +74,7 @@ impl Session {
         let config_paths = discovery::collect_config_paths(&start_dir, &discovery_cfg);
         let project = MergedProjectConfig::from_paths_near_to_far(&config_paths)?;
 
-        // 上溯路径与停止原因 —— 给 `info` 与"为什么没找到"用
+        // Walk-up path and stop reason -- used by `info` and by "why was nothing found"
         let walk = discovery::walk(&start_dir, &discovery_cfg);
 
         Ok(Self {
@@ -83,56 +90,58 @@ impl Session {
         })
     }
 
-    /// 项目根。找不到就是找不到 —— 不退回 cwd。
+    /// The project root. Not found is not found -- it never falls back to cwd.
     pub fn project_root(&self) -> Option<&Path> {
         self.project_root.as_deref()
     }
 
-    /// 检测不到项目时的报错（退出码 3）。
+    /// The error for "no project detected" (exit code 3).
     ///
-    /// `hints` 那张静态表只陈述事实，不推荐装哪个插件。
+    /// The static `hints` table only states facts; it never recommends a plugin to install.
     pub fn no_project_error(&self) -> PmpxError {
-        let mut msg = format!("在 {} 里检测不到项目类型。", self.start_dir.display());
+        let mut msg = format!("no project type detected in {}.", self.start_dir.display());
 
-        // 上溯停在哪 —— 这决定了是"找过了但没有"还是"根本没找几层"
+        // Where walk-up stopped -- this decides between "searched and found nothing" and
+        // "barely searched at all"
         msg.push_str(&format!(
-            "\n上溯了 {} 个目录，停止原因：{}。",
-            self.walk.dirs.len(),
+            "\nWalked up {}, stopped because: {}.",
+            crate::discovery::dirs(self.walk.dirs.len()),
             self.walk.stopped.describe(self.global.discovery.max_depth)
         ));
 
         if self.walk.stopped == StopReason::WalkUpDisabled {
             msg.push_str(
-                "\n（`--no-walk-up` 或全局配置的 `[discovery] walk_up = false` 关掉了上溯）",
+                "\n(`--no-walk-up` or the global `[discovery] walk_up = false` turned walk-up off)",
             );
         }
 
         let installed: Vec<String> = self.plugins.usable().map(|p| p.name.clone()).collect();
         if installed.is_empty() {
             msg.push_str(
-                "\n一个插件都没装。pmpx 靠**已安装插件**声明的特征文件来判断项目类型，\
-                 所以现在任何项目都检测不出来。",
+                "\nNo plugins are installed. pmpx decides the project type from the marker \
+                 files declared by installed plugins, so nothing can be detected right now.",
             );
         } else {
-            msg.push_str(&format!("\n已装插件：{}", installed.join(", ")));
+            msg.push_str(&format!("\nInstalled plugins: {}", installed.join(", ")));
         }
 
         let hints = crate::hints::probe(&self.start_dir);
         if !hints.is_empty() {
-            msg.push_str("\n\n这里的文件看起来像：");
+            msg.push_str("\n\nThese files look like:");
             for h in &hints {
-                msg.push_str(&format!("\n  · {}（{}）", h.family, h.matched.join(", ")));
+                msg.push_str(&format!("\n  - {} ({})", h.family, h.matched.join(", ")));
             }
         }
 
         msg.push_str(
-            "\n\n可以在当前目录写一个 .pmpx.toml 显式声明，例如：\n  [plugin]\n  rust = \"cargo\"",
+            "\n\nYou can declare it explicitly with a .pmpx.toml in the current directory, \
+             for example:\n  [plugin]\n  rust = \"cargo\"",
         );
 
         PmpxError::not_found(msg)
     }
 
-    /// 裁决出该用哪个插件。
+    /// Resolve which plugin to use.
     pub fn select(&self, root: &Path) -> std::result::Result<Selection, DetectFailure> {
         detect::select(
             &self.plugins,
@@ -143,7 +152,7 @@ impl Session {
         )
     }
 
-    /// 打印裁决过程中的提示。`--quiet` 关掉它们。
+    /// Print the notes from the resolution. `--quiet` turns them off.
     pub fn emit_notes(&self, selection: &Selection) {
         if self.quiet {
             return;
@@ -153,15 +162,17 @@ impl Session {
         }
         if !selection.notes.is_empty() {
             eprintln!(
-                "pmpx: 用 `pmpx -p <name>` 临时覆盖，或 `pmpx plugin set {}` 固化到 .pmpx.toml",
+                "pmpx: override it for one run with `pmpx -p <name>`, or pin it in .pmpx.toml \
+                 with `pmpx plugin set {}`",
                 selection.name
             );
         }
     }
 
-    /// 项目根里命中选中插件声明的那些文件 —— 这就是送进 `Context::matched` 的东西。
+    /// The files the selected plugin declares, matched in the project root -- exactly what
+    /// is passed as `Context::matched`.
     ///
-    /// 相对 `project_root`，已排序去重。
+    /// Relative to `project_root`, sorted and deduplicated.
     pub fn matched_for(&self, root: &Path, selection: &Selection) -> Vec<String> {
         let Some(plugin) = self.plugins.by_crate_name(&selection.crate_name) else {
             return Vec::new();
@@ -172,11 +183,11 @@ impl Session {
             .collect()
     }
 
-    /// 加载选中的插件。
+    /// Load the selected plugin.
     pub fn load_backend(&self, selection: &Selection) -> crate::error::Result<Backend> {
         let Some(plugin) = self.plugins.by_crate_name(&selection.crate_name) else {
             return Err(PmpxError::not_found(format!(
-                "插件 {} 不在清单里（两次读之间被删了？）",
+                "plugin {} is not in the list (deleted between the two reads?)",
                 selection.crate_name
             )));
         };
@@ -184,10 +195,10 @@ impl Session {
     }
 }
 
-/// 算出起点目录。
+/// Compute the start directory.
 ///
-/// `-C` 指定的目录必须存在，否则是一条明确的用法错误 —— 悄悄退回 cwd 会让
-/// "我在别的目录跑了命令"变得难以察觉。
+/// The directory given by `-C` must exist, otherwise it is a clear usage error -- quietly
+/// falling back to cwd would make "I ran the command in the wrong directory" hard to notice.
 fn resolve_start_dir(dir: Option<&Path>) -> Result<PathBuf> {
     match dir {
         Some(d) => {
@@ -197,7 +208,10 @@ fn resolve_start_dir(dir: Option<&Path>) -> Result<PathBuf> {
                 std::env::current_dir()?.join(d)
             };
             if !abs.is_dir() {
-                anyhow::bail!("-C 指定的目录不存在：{}", abs.display());
+                anyhow::bail!(
+                    "the directory given by -C does not exist: {}",
+                    abs.display()
+                );
             }
             Ok(abs)
         }
@@ -205,10 +219,12 @@ fn resolve_start_dir(dir: Option<&Path>) -> Result<PathBuf> {
     }
 }
 
-/// 把一次动词调用跑到底：裁决 → 加载 → 问插件 → spawn → 透传退出码。
+/// Run one verb all the way: resolve -> load -> ask the plugin -> spawn -> pass the exit
+/// code through.
 ///
-/// `allow_exec_fallback` 是唯一例外：只有 `exec` 为真，插件不支持时会退化成
-/// pmpx 自己做裸透传；其余六个动词维持"不支持就报错"。
+/// `allow_exec_fallback` is the single exception: it is true only for `exec`, where an
+/// unsupported verb degrades into pmpx passing the command through verbatim itself; the
+/// other six verbs keep "unsupported is an error".
 pub fn run_verb(
     session: &Session,
     verb: Verb,
@@ -218,7 +234,8 @@ pub fn run_verb(
     let root = match session.project_root() {
         Some(r) => r.to_path_buf(),
         None => {
-            // `exec` 是逃生舱：零插件也要能用。没有项目根就退回起点目录。
+            // `exec` is the escape hatch: it has to work with zero plugins too. With no
+            // project root it falls back to the start directory.
             if allow_exec_fallback {
                 let cwd = session.start_dir.clone();
                 return passthrough(&cwd, args);
@@ -233,7 +250,7 @@ pub fn run_verb(
             if allow_exec_fallback {
                 return passthrough(&root, args);
             }
-            // `DetectFailure` 都是退出码 3
+            // Every `DetectFailure` is exit code 3
             return Err(failure.into());
         }
     };
@@ -252,7 +269,7 @@ pub fn run_verb(
         Ok(Err(BackendError::UnsupportedVerb)) if allow_exec_fallback => passthrough(&root, args),
 
         Ok(Err(e)) => Err(PmpxError::Backend(
-            format!("{} 做不到 `{verb}`：{e}", selection.name),
+            format!("{} cannot do `{verb}`: {e}", selection.name),
             e.exit_code(),
         )),
 
@@ -260,13 +277,13 @@ pub fn run_verb(
     }
 }
 
-/// 裸透传：直接跑用户给的那条命令，cwd = 项目根。
+/// Pass through verbatim: run the command the user gave, cwd = project root.
 ///
-/// 这是"不支持就报错"的唯一例外，只在 `exec` 上发生。
+/// This is the one exception to "unsupported is an error" and happens only for `exec`.
 fn passthrough(cwd: &Path, args: &[OsString]) -> crate::error::Result<u8> {
     let Some((program, rest)) = args.split_first() else {
         return Err(PmpxError::Usage(
-            "`pmpx exec` 需要一个命令，例如 `pmpx exec ls`".to_string(),
+            "`pmpx exec` needs a command, for example `pmpx exec ls`".to_string(),
         ));
     };
 

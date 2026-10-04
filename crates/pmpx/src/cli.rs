@@ -1,38 +1,38 @@
-//! 命令行表面。
+//! The command-line surface.
 //!
-//! 这个文件只做解析：把 `argv` 变成一个结构体。所有语义（检测、裁决、spawn）
-//! 都在别处。
+//! This file only parses: it turns `argv` into a struct. All semantics (detection,
+//! resolution, spawn) live elsewhere.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// 全局参数。它们对所有子命令生效，所以标了 `global`。
+/// Global arguments. They apply to every subcommand, hence `global`.
 #[derive(Debug, Parser)]
 #[command(
     name = "pmpx",
     version,
-    about = "一个命令面，识别项目类型，转发给真正的工具",
+    about = "One command surface: detect the project type and forward to the real tool",
     long_about = None,
     arg_required_else_help = false,
 )]
 pub struct Cli {
-    /// 临时指定插件，压过 `.pmpx.toml`
+    /// Use this plugin for now, overriding `.pmpx.toml`
     ///
-    /// 一次性覆盖，不落盘。要固化请用 `pmpx plugin set`。
+    /// A one-off override that is not written to disk. To pin it, use `pmpx plugin set`.
     #[arg(short = 'p', long = "plugin", global = true, value_name = "NAME")]
     pub plugin: Option<String>,
 
-    /// 在指定目录操作（等价于先 cd 过去）
+    /// Operate in this directory (same as cd'ing there first)
     #[arg(short = 'C', long = "dir", global = true, value_name = "PATH")]
     pub dir: Option<PathBuf>,
 
-    /// 只检查当前目录，不向上找项目根
+    /// Only check the current directory, do not walk up to the project root
     #[arg(long = "no-walk-up", global = true)]
     pub no_walk_up: bool,
 
-    /// 关掉 stderr 上的提示（检测歧义、未安装候选等）
+    /// Turn off the notes on stderr (ambiguous detection, uninstalled candidates, ...)
     #[arg(short = 'q', long = "quiet", global = true)]
     pub quiet: bool,
 
@@ -40,65 +40,66 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
-/// 子命令表。
+/// The subcommand table.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// 装依赖。无参 = 按锁文件装齐；带参 = 添加
+    /// Install dependencies. No arguments = install the whole tree; with arguments = add
+    /// them
     #[command(visible_aliases = ["i", "add"])]
     Install {
-        /// 要添加的依赖；留空表示按锁文件装齐
+        /// Dependencies to add; empty means install the whole tree
         #[arg(value_name = "PKG")]
         packages: Vec<OsString>,
     },
 
-    /// 卸依赖
+    /// Remove dependencies
     #[command(visible_aliases = ["rm", "uninstall"])]
     Remove {
-        /// 要卸载的依赖
+        /// Dependencies to remove
         #[arg(value_name = "PKG", required = true)]
         packages: Vec<OsString>,
     },
 
-    /// 跑脚本 / 目标
+    /// Run a script / target
     #[command(visible_alias = "r")]
     Run {
-        /// 脚本名 / 目标名。cargo 下通常留空
+        /// Script name / target name. Usually empty under cargo
         #[arg(value_name = "TARGET")]
         target: Option<OsString>,
 
-        /// `--` 之后的内容原样传给后端，不做任何解释
+        /// What follows `--` is passed to the backend verbatim, with no interpretation
         #[arg(last = true, value_name = "ARG")]
         args: Vec<OsString>,
     },
 
-    /// 构建
+    /// Build
     #[command(visible_alias = "b")]
     Build {
-        /// `--` 之后的内容原样传给后端
+        /// What follows `--` is passed to the backend verbatim
         #[arg(last = true, value_name = "ARG")]
         args: Vec<OsString>,
     },
 
-    /// 测试
+    /// Test
     #[command(visible_alias = "t")]
     Test {
-        /// `--` 之后的内容原样传给后端
+        /// What follows `--` is passed to the backend verbatim
         #[arg(last = true, value_name = "ARG")]
         args: Vec<OsString>,
     },
 
-    /// 更新依赖
+    /// Update dependencies
     #[command(visible_alias = "up")]
     Update {
-        /// 只更新这些依赖；留空表示全部
+        /// Only update these dependencies; empty means all of them
         #[arg(value_name = "PKG")]
         packages: Vec<OsString>,
     },
 
-    /// 逃生舱：跑任意命令。插件不支持时 pmpx 自己做裸透传
+    /// Escape hatch: run any command. When the plugin does not support it, pmpx passes it through verbatim itself
     #[command(visible_alias = "x")]
     Exec {
-        /// 命令与它的参数
+        /// The command and its arguments
         #[arg(
             value_name = "CMD",
             required = true,
@@ -108,20 +109,20 @@ pub enum Command {
         command: Vec<OsString>,
     },
 
-    /// 详细：项目根、候选与得分、插件版本、ABI 诊断
+    /// Verbose: project root, candidates and scores, plugin versions, ABI diagnostics
     Info,
 
-    /// 管理插件
+    /// Manage plugins
     #[command(subcommand)]
     Plugin(PluginCommand),
 
-    /// 读写全局配置
+    /// Read and write the global config
     #[command(subcommand)]
     Config(ConfigCommand),
 
-    /// 输出 shell 补全脚本到 stdout，用户自己重定向
+    /// Print a shell completion script to stdout; redirect it yourself
     Completion {
-        /// 目标 shell
+        /// Target shell
         #[arg(value_name = "SHELL")]
         shell: clap_complete::Shell,
     },
@@ -130,78 +131,78 @@ pub enum Command {
 /// `pmpx plugin <...>`
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// 按生态分组列出已安装的插件（只读 manifest，不 dlopen）
+    /// List installed plugins grouped by family (reads manifests only, no dlopen)
     #[command(visible_alias = "list")]
     Ls {
-        /// 平铺输出，不分组
+        /// Flat output, no grouping
         #[arg(long)]
         flat: bool,
     },
 
-    /// 各生态的当前插件，以及候选与得分
+    /// The current plugin per family, plus candidates and scores
     Current,
 
-    /// 把某个插件固化到 `.pmpx.toml`（只影响它所属的那个生态）
+    /// Pin a plugin in `.pmpx.toml` (only affects the family it belongs to)
     Set {
-        /// 插件名，例如 `pnpm`
+        /// Plugin name, for example `pnpm`
         #[arg(value_name = "NAME")]
         name: String,
     },
 
-    /// 删掉 `.pmpx.toml` 里的固化项
+    /// Delete a pin from `.pmpx.toml`
     Unset {
-        /// 只删这个生态；留空表示全部（此时要求 `--yes`）
+        /// Only delete this family; empty means all of them (which then requires `--yes`)
         #[arg(value_name = "FAMILY")]
         family: Option<String>,
 
-        /// 确认删除全部
+        /// Confirm deleting all of them
         #[arg(long)]
         yes: bool,
     },
 
-    /// 装插件
+    /// Install plugins
     Add {
-        /// 插件名，例如 `pnpm`（会展开成 `pmpx-plugin-pnpm`）
+        /// Plugin name, for example `pnpm` (expands to `pmpx-plugin-pnpm`)
         #[arg(value_name = "NAME", required = true)]
         names: Vec<String>,
 
-        /// 指定版本；留空表示最新
+        /// A specific version; empty means latest
         #[arg(long, value_name = "VERSION")]
         version: Option<String>,
     },
 
-    /// 卸插件
+    /// Remove plugins
     Rm {
-        /// 插件名
+        /// Plugin name
         #[arg(value_name = "NAME", required = true)]
         names: Vec<String>,
     },
 
-    /// 更新插件
+    /// Update plugins
     Update {
-        /// 只更新这个插件；留空表示全部
+        /// Only update this plugin; empty means all of them
         #[arg(value_name = "NAME")]
         names: Vec<String>,
 
-        /// 指定版本；只能与单个插件名同用
+        /// A specific version; only valid together with a single plugin name
         #[arg(long, value_name = "VERSION")]
         version: Option<String>,
     },
 
-    /// 在 crates.io 上搜索插件
+    /// Search crates.io for plugins
     Search {
-        /// 关键词
+        /// Keyword
         #[arg(value_name = "KEYWORD", required = true)]
         keyword: String,
 
-        /// 最多显示几条
+        /// Show at most this many
         #[arg(long, default_value_t = 20, value_name = "N")]
         limit: usize,
     },
 
-    /// 看某个插件在 crates.io 上的信息
+    /// Show a plugin's crates.io information
     Info {
-        /// 插件名
+        /// Plugin name
         #[arg(value_name = "NAME")]
         name: String,
     },
@@ -210,30 +211,30 @@ pub enum PluginCommand {
 /// `pmpx config <...>`
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    /// 读一个键。支持点号路径，例如 `plugin.family_priority`
+    /// Read one key. Dotted paths work, for example `plugin.family_priority`
     Get {
-        /// 键名
+        /// Key name
         #[arg(value_name = "KEY")]
         key: String,
     },
 
-    /// 写一个键。只写全局配置，绝不碰项目里的 `.pmpx.toml`
+    /// Write one key. Only writes the global config, never a project `.pmpx.toml`
     Set {
-        /// 键名
+        /// Key name
         #[arg(value_name = "KEY")]
         key: String,
 
-        /// 值。会按现有类型解析（数组 / 布尔 / 数字 / 字符串）
+        /// Value. Parsed according to its existing type (array / boolean / number / string)
         #[arg(value_name = "VALUE")]
         value: String,
     },
 }
 
-/// 输出格式。
+/// Output format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
-    /// 人类可读
+    /// Human readable
     Text,
-    /// 机器可读
+    /// Machine readable
     Json,
 }

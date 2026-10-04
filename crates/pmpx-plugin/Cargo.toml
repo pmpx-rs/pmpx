@@ -5,24 +5,27 @@ version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
-# 不继承工作区地板（1.88）：这个 crate 零依赖，只需要 1.82
-# （`#[unsafe(no_mangle)]` 的最低版本）。这一栏决定了谁能写插件，
-# 不该被同工作区里另一个 crate 的依赖拖高。
+# Does not inherit the workspace floor (1.88): this crate has zero dependencies and needs
+# only 1.82 (the minimum for `#[unsafe(no_mangle)]`). This field decides who can write
+# plugins, and must not be dragged up by another crate's dependencies in the same workspace.
 rust-version = "1.82"
 keywords = ["plugin", "abi", "cdylib", "ffi"]
 categories = ["development-tools"]
 
-# 零依赖，刻意的：这个 crate 会被 pmpx 和每一个插件依赖，
-# 它多一个依赖所有人就多一个，MSRV 抬高一次能写插件的人就少一批。
-# 跨边界只有 `#[repr(C)]` 数据，也确实用不上别的。
+# Zero dependencies, deliberately: both pmpx and every plugin depend on this crate, so one
+# more dependency for it is one more for everyone, and raising its MSRV once means fewer
+# people can write plugins. Only `#[repr(C)]` data crosses the boundary, so nothing else is
+# needed anyway.
 [dependencies]
 
 [build-dependencies]
-# 无依赖：build.rs 只起一次 `rustc --version`，把结果写进环境变量。
+# No dependencies: build.rs just runs `rustc --version` once and writes the result into an
+# environment variable.
 
 [dev-dependencies]
-# 走真实的加载链路：用宿主真正会用的那个库去 dlopen 一个真 cdylib。
-# 手写 libloading 的话就得把入口符号名和库文件名硬编码一遍，
-# 而那正是最该被测试发现"对不上"的两个名字。
+# Goes through the real load path: dlopen an actual cdylib using the very library the host
+# will use. Hand-rolling libloading would mean hard-coding both the entry symbol name and the
+# library file name, and those are exactly the two names a test should catch being out of
+# sync.
 crate-plugin-kit.workspace = true
 tempfile = "3"

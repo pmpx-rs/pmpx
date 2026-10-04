@@ -1,13 +1,15 @@
-//! 加载选中的插件，跨 ABI 调它。
+//! Load the selected plugin and call it across the ABI.
 //!
-//! 校验发生在调用之前，而不是加载之时：`crate-plugin-kit` 的 `load()` 只保证"能
-//! `dlopen`、能取到入口符号"，"这个插件能不能跟这个宿主说话"由 pmpx 判断 —— 拿到
-//! vtable 之后立刻查 `abi_version == ABI_VERSION`（相等即可，不是 crate 版本全等）
-//! 与 `name()` 是否和 manifest 声明的一致。
+//! Validation happens before the call, not at load time: `crate-plugin-kit`'s `load()` only
+//! guarantees "it can be `dlopen`ed and the entry symbol can be fetched"; whether this
+//! plugin can talk to this host is decided by pmpx -- right after getting the vtable it
+//! checks `abi_version == ABI_VERSION` (equality is enough, not full crate version equality)
+//! and that `name()` matches what the manifest declared.
 //!
-//! 每一次对插件的调用都包在 `catch_unwind` 里，但那只是兜底 —— 主要防线在插件侧
-//! `export!` 生成的 `extern "C"` 外壳里：从 Rust 1.81 起，让 panic 越过 `extern "C"`
-//! 会直接 abort，宿主这边根本救不了。
+//! Every call into the plugin is wrapped in `catch_unwind`, but that is only a fallback --
+//! the main defence is the `extern "C"` shell that the plugin-side `export!` generates:
+//! since Rust 1.81, letting a panic cross `extern "C"` aborts outright and the host cannot
+//! rescue it.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -22,33 +24,34 @@ use pmpx_plugin::{CommandSpec, Verb};
 use crate::error::{PmpxError, Result};
 use crate::plugins::InstalledPlugin;
 
-/// 插件明确报出来的失败。
+/// A failure the plugin reported explicitly.
 ///
-/// **与 [`PmpxError`] 分开**是因为含义不同：`PmpxError` 是"pmpx 这边出问题了"，
-/// 这个是"插件正常地回答说这件事我做不了"。
+/// **Kept separate from [`PmpxError`]** because the meaning differs: `PmpxError` is "something
+/// went wrong on pmpx's side", this is "the plugin answered normally that it cannot do this".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendError {
-    /// 插件不支持这个动词。
+    /// The plugin does not support this verb.
     ///
-    /// `pmpx exec` 收到它会退化成裸透传；其余六个动词维持"不支持就报错"。
+    /// `pmpx exec` degrades to passing through verbatim when it gets this; the other six
+    /// verbs keep "unsupported is an error".
     UnsupportedVerb,
 
-    /// 插件说入参不对。
+    /// The plugin says the arguments are wrong.
     InvalidArgs(String),
 
-    /// 插件内部出错，或者它 panic 了。
+    /// The plugin failed internally, or it panicked.
     Internal(String),
 }
 
 impl BackendError {
-    /// 对应的进程退出码。
+    /// The matching process exit code.
     pub fn exit_code(&self) -> u8 {
         match self {
-            // "你让我做的事这个后端做不了" —— 与用法错误同一个码
+            // "this backend cannot do what you asked" -- same code as a usage error
             BackendError::UnsupportedVerb | BackendError::InvalidArgs(_) => {
                 crate::error::EXIT_USAGE
             }
-            // 插件炸了 —— 算 pmpx 自身错误
+            // the plugin blew up -- counted as a pmpx error of its own
             BackendError::Internal(_) => crate::error::EXIT_INTERNAL,
         }
     }
@@ -57,31 +60,32 @@ impl BackendError {
 impl std::fmt::Display for BackendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BackendError::UnsupportedVerb => f.write_str("这个后端不支持该动词"),
-            BackendError::InvalidArgs(m) => write!(f, "后端拒绝了入参：{m}"),
-            BackendError::Internal(m) => write!(f, "后端内部错误：{m}"),
+            BackendError::UnsupportedVerb => f.write_str("this backend does not support that verb"),
+            BackendError::InvalidArgs(m) => write!(f, "the backend rejected the arguments: {m}"),
+            BackendError::Internal(m) => write!(f, "the backend failed internally: {m}"),
         }
     }
 }
 
-/// 一个已经加载、已经通过 ABI 与名字校验的插件。
+/// A plugin that is loaded and has passed the ABI and name checks.
 ///
-/// 它持有 `dlopen` 的句柄，所以它的生命周期内那个动态库不会被卸掉。
-/// 绝不能 `Send`/`Sync`：vtable 里的函数指针归属那个动态库，跨线程调用它会让
-/// "库还在不在"这件事失去保证。
+/// It holds the `dlopen` handle, so the dynamic library is not unloaded during its lifetime.
+/// It must never be `Send`/`Sync`: the function pointers in the vtable belong to that dynamic
+/// library, and calling them from another thread would remove the guarantee that the library
+/// is still there.
 pub struct Backend {
     loaded: LoadedPlugin<PmpxPluginV1>,
-    /// manifest 里声明的插件名。
+    /// The plugin name declared in the manifest.
     pub name: String,
 }
 
 impl Backend {
-    /// 加载一个插件并校验它。
+    /// Load one plugin and validate it.
     pub fn load(kit: &CratePluginKit<PmpxPluginV1>, plugin: &InstalledPlugin) -> Result<Self> {
         let loaded = kit.load(&plugin.crate_name).map_err(|e| {
             PmpxError::not_found(format!(
-                "加载插件 {} 失败：{e}\n\
-                 插件装在 {} —— 用 `pmpx plugin rm {}` 删掉后重装试试。",
+                "failed to load plugin {}: {e}\n\
+                 It is installed at {} -- try `pmpx plugin rm {}` and install it again.",
                 plugin.crate_name,
                 plugin.dir.display(),
                 plugin.name
@@ -90,23 +94,27 @@ impl Backend {
 
         let entry = unsafe { &*loaded.entry() };
 
-        // ABI 版本必须相等
+        // The ABI version must be equal
         if entry.abi_version != ABI_VERSION {
             return Err(PmpxError::not_found(format!(
-                "插件 {} 的 ABI 版本是 {}，pmpx 需要 {}。\n\
-                 它们是两个独立编译的世界，布局对不上就不能加载 —— 这比崩溃好。\n\
-                 用 `pmpx plugin update {}` 升级插件，或把 pmpx 升到匹配的版本。",
+                "plugin {} has ABI version {}, pmpx needs {}.\n\
+                 They are two separately compiled worlds; when the layouts do not line up it \
+                 cannot be loaded -- that is better than crashing.\n\
+                 Use `pmpx plugin update {}` to upgrade the plugin, or upgrade pmpx to a \
+                 matching version.",
                 plugin.crate_name, entry.abi_version, ABI_VERSION, plugin.name
             )));
         }
 
-        // 自报名必须与 manifest 声明的一致
+        // The self-reported name must match what the manifest declares
         let self_reported = unsafe { read_plugin_str(entry.name, entry.free_str) };
         if self_reported != plugin.name {
-            // 两个名字都要打出来 —— 只说"不一致"用户没法判断该信哪个
+            // Both names have to be printed -- just saying "they differ" leaves the user
+            // unable to tell which one to trust
             return Err(PmpxError::not_found(format!(
-                "插件自报名是 \"{self_reported}\"，但 manifest 声明的是 \"{}\" —— 拒绝加载。\n\
-                 请删掉 {} 后重新安装。",
+                "the plugin calls itself \"{self_reported}\", but the manifest declares \
+                 \"{}\" -- refusing to load.\n\
+                 Delete {} and install it again.",
                 plugin.name,
                 plugin.dir.display()
             )));
@@ -118,36 +126,39 @@ impl Backend {
         })
     }
 
-    /// 指向 vtable 的引用。
+    /// A reference to the vtable.
     fn entry(&self) -> &PmpxPluginV1 {
-        // SAFETY: `load()` 校验过它非空，而且 `self.loaded` 持有那个动态库。
+        // SAFETY: `load()` checked that it is not null, and `self.loaded` holds that dynamic
+        // library.
         unsafe { &*self.loaded.entry() }
     }
 
-    /// 插件自报的生态。
+    /// The family the plugin reports for itself.
     ///
-    /// 加载之前用的是 manifest 里的值（检测阶段只能读它），加载之后这里拿到的是
-    /// 插件自己说的。两者不一致不是致命问题（所以不拒绝加载），但值得显示出来。
+    /// Before loading, the value came from the manifest (detection can only read that); after
+    /// loading this is what the plugin itself says. The two disagreeing is not fatal (so it
+    /// does not refuse to load), but it is worth showing.
     pub fn family(&self) -> String {
         let e = self.entry();
         unsafe { read_plugin_str(e.family, e.free_str) }
     }
 
-    /// 插件编译时用的 rustc 版本。只用于诊断。
+    /// The rustc version the plugin was compiled with. Diagnostics only.
     pub fn rustc_version(&self) -> String {
         unsafe { read_bytes(self.entry().rustc_version) }
     }
 
-    /// 插件编译时的 target triple。只用于诊断。
+    /// The target triple the plugin was compiled for. Diagnostics only.
     pub fn target(&self) -> String {
         unsafe { read_bytes(self.entry().target) }
     }
 
-    /// 把「动词 + 参数」交给插件翻译成一条命令。
+    /// Hand "verb + arguments" to the plugin and let it translate them into one command.
     ///
-    /// 返回值是 `Result<Result<...>>`：外层 [`PmpxError`] 表示跨边界这件事本身失败了
-    /// （不该发生）；内层 [`BackendError`] 表示插件正常地回答说它做不了 —— 那是业务
-    /// 结果，不是故障。
+    /// The return value is `Result<Result<...>>`: the outer [`PmpxError`] means crossing the
+    /// boundary itself failed (which should not happen); the inner [`BackendError`] means the
+    /// plugin answered normally that it cannot do this -- that is a business result, not a
+    /// fault.
     pub fn command(
         &self,
         project_root: &Path,
@@ -158,8 +169,9 @@ impl Backend {
         let entry = self.entry();
 
         // ---------------------------------------------------------------
-        // 输入方向：宿主分配、宿主释放、插件只读 —— 这些 Vec 活到本函数结束，
-        // 插件被要求在这之前读完。
+        // Input direction: allocated by the host, freed by the host, read-only for the
+        // plugin -- these Vecs live until the end of this function, and the plugin is
+        // required to finish reading before that.
         // ---------------------------------------------------------------
         let root_bytes = abi::os_to_bytes(project_root.as_os_str());
         let root = PmpxStr {
@@ -189,16 +201,19 @@ impl Backend {
             .collect();
 
         // ---------------------------------------------------------------
-        // 输出方向：插件分配、插件释放，宿主只读
+        // Output direction: allocated by the plugin, freed by the plugin, read-only for the
+        // host
         // ---------------------------------------------------------------
         let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
 
         let code = {
             let out_ptr = out.as_mut_ptr();
-            // 兜底的那层 catch_unwind。主要防线在插件侧的 export! 外壳里。
+            // The fallback catch_unwind layer. The main defence is in the plugin-side
+            // export! shell.
             abi::guard(move || {
-                // SAFETY: 输入由本函数分配并在调用期间保持存活；out 指向本地可写内存。
-                // 其余约定由 `PmpxPluginV1::command` 的 Safety 段规定。
+                // SAFETY: the inputs are allocated by this function and stay alive for the
+                // call; out points to local writable memory. The remaining contract is
+                // stated in the Safety section of `PmpxPluginV1::command`.
                 unsafe {
                     (entry.command)(
                         root,
@@ -218,28 +233,29 @@ impl Backend {
             PMPX_ERR_UNSUPPORTED_VERB => return Ok(Err(BackendError::UnsupportedVerb)),
             PMPX_ERR_INVALID_ARGS => {
                 return Ok(Err(BackendError::InvalidArgs(format!(
-                    "插件 {} 认为参数不合法",
+                    "plugin {} thinks the arguments are invalid",
                     self.name
                 ))))
             }
             PMPX_ERR_INTERNAL => {
                 return Ok(Err(BackendError::Internal(format!(
-                    "插件 {} 内部出错或 panic 了（细节在它自己的 stderr 上）",
+                    "plugin {} failed internally or panicked (details on its own stderr)",
                     self.name
                 ))))
             }
             other => {
                 return Ok(Err(BackendError::Internal(format!(
-                    "插件 {} 返回了未知错误码 {other}",
+                    "plugin {} returned unknown error code {other}",
                     self.name
                 ))))
             }
         }
 
-        // SAFETY: `PMPX_OK` 时插件保证已填充 out。
+        // SAFETY: on `PMPX_OK` the plugin guarantees it filled out.
         let mut cmd = unsafe { out.assume_init() };
 
-        // 把这些内存拷出来，然后按约定还给插件 —— 宿主自始至终只读。
+        // Copy this memory out, then give it back to the plugin as agreed -- the host stays
+        // read-only throughout.
         let spec = unsafe {
             let program = abi::read_os(cmd.program);
             let cwd = if cmd.cwd.is_empty() {
@@ -258,13 +274,13 @@ impl Backend {
             }
         };
 
-        // SAFETY: 来自上面那次成功的调用，且只释放一次。
+        // SAFETY: it comes from the successful call above, and is freed exactly once.
         unsafe { (entry.free_command)(&mut cmd as *mut _) };
 
         Ok(Ok(spec))
     }
 
-    /// 给 `pmpx info` 用的诊断信息。
+    /// The diagnostics `pmpx info` shows.
     pub fn diagnostics(&self) -> BackendDiagnostics {
         BackendDiagnostics {
             name: self.name.clone(),
@@ -275,40 +291,42 @@ impl Backend {
     }
 }
 
-/// `pmpx info` 显示的插件自报信息。
+/// What the plugin reports about itself, as shown by `pmpx info`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendDiagnostics {
-    /// 插件自报名。
+    /// The plugin's self-reported name.
     pub name: String,
-    /// 插件自报的生态。
+    /// The family the plugin reports for itself.
     pub family: String,
-    /// 编译它的 rustc。
+    /// The rustc that compiled it.
     pub rustc_version: String,
-    /// 编译它的 target triple。
+    /// The target triple it was compiled for.
     pub target: String,
 }
 
-/// 调一次返回 [`PmpxStr`] 的 vtable 函数，读成 Rust 字符串，**按约定释放**。
+/// Call one vtable function that returns a [`PmpxStr`], read it as a Rust string, and
+/// **release it as agreed**.
 ///
 /// # Safety
 ///
-/// `f` 与 `free` 必须来自同一张、仍然有效的 vtable。
+/// `f` and `free` must come from the same still-valid vtable.
 unsafe fn read_plugin_str(
     f: unsafe extern "C" fn() -> PmpxStr,
     free: unsafe extern "C" fn(PmpxStr),
 ) -> String {
     let s = unsafe { f() };
     let out = unsafe { read_bytes(s) };
-    // 内存归插件，读完必须还回去 —— 宿主从不 free 自己没分配的东西。
+    // The memory belongs to the plugin and must be given back after reading -- the host
+    // never frees what it did not allocate.
     unsafe { free(s) };
     out
 }
 
-/// 读一段 [`PmpxStr`]，不释放。
+/// Read a [`PmpxStr`] without releasing it.
 ///
 /// # Safety
 ///
-/// `s` 必须描述一段在调用期间有效的只读内存。
+/// `s` must describe read-only memory that is valid for the duration of the call.
 unsafe fn read_bytes(s: PmpxStr) -> String {
     if s.ptr.is_null() || s.len == 0 {
         return String::new();
@@ -339,7 +357,9 @@ mod tests {
 
     #[test]
     fn backend_error_messages_name_the_backend_situation() {
-        assert!(BackendError::UnsupportedVerb.to_string().contains("不支持"));
+        assert!(BackendError::UnsupportedVerb
+            .to_string()
+            .contains("does not support"));
         assert!(BackendError::InvalidArgs("a".into())
             .to_string()
             .contains('a'));
@@ -357,7 +377,11 @@ mod tests {
             ptr: std::ptr::null(),
             len: 99,
         };
-        assert_eq!(unsafe { read_bytes(s) }, "", "空指针不该被解引用");
+        assert_eq!(
+            unsafe { read_bytes(s) },
+            "",
+            "a null pointer must not be dereferenced"
+        );
     }
 
     #[test]
@@ -367,7 +391,7 @@ mod tests {
             ptr: bytes.as_ptr(),
             len: bytes.len(),
         };
-        // 诊断信息而已，有损转换就够了 —— 但不能 panic
+        // Diagnostics only, so a lossy conversion is enough -- but it must not panic
         assert!(!unsafe { read_bytes(s) }.is_empty());
     }
 }

@@ -1,87 +1,98 @@
-//! 跨 `dlopen` 边界的**线格式**。
+//! The wire format across the `dlopen` boundary.
 //!
-//! 宿主与插件是两个独立编译的世界，所以穿过这条线的数据只能是 `#[repr(C)]` 的 POD 与普通
-//! 整数：`String` / `Vec` / `Box` 的内存归哪个分配器没有保证，`toml::Value` / `anyhow::Error`
-//! 的布局随依赖的小版本变化，trait object 的 vtable 归属两边也没有约定。
-//! 代价是两边不共享分配器 —— **内存一律由分配方释放**：宿主传进来的输入只读，插件产出的
-//! 输出（`PmpxCommand` 及其内部字符串、`name` / `family`）由宿主用 [`free_command`] /
-//! [`free_str`] 还回去。所以 `free_*` 里绝不能用宿主的 `Box::from_raw` 去接插件给的内存。
+//! The host and the plugin are two separately compiled worlds, so data crossing this line can
+//! only be `#[repr(C)]` POD and plain integers: there is no guarantee about which allocator owns
+//! the memory of `String` / `Vec` / `Box`, the layout of `toml::Value` / `anyhow::Error` changes
+//! with dependency patch versions, and nothing fixes which side a trait object's vtable belongs
+//! to. The price is that the two sides share no allocator -- memory is always freed by the side
+//! that allocated it: inputs passed in by the host are read-only, and outputs produced by the
+//! plugin (`PmpxCommand` and the strings inside it, `name` / `family`) are handed back by the
+//! host with [`free_command`] / [`free_str`]. So `free_*` must never use the host's
+//! `Box::from_raw` to adopt memory that came from the plugin.
 
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use crate::{CommandSpec, Context, PackageManager, Verb};
 
-// ---- 版本 ----
+// ---- Version ----
 
-/// 跨边界布局的版本，**独立整数，与 crate 版本号彻底解耦**。
-/// 只有 [`PmpxPluginV1`] / [`PmpxCommand`] / [`PmpxStr`] 的形状、动词编号或错误码语义真的
-/// 变了才 `+1`。宿主拿它做**唯一**的硬校验，不相等就拒绝加载。
+/// Version of the cross-boundary layout, an independent integer, fully decoupled from the crate
+/// version. Bump it by one only when the shape of [`PmpxPluginV1`] / [`PmpxCommand`] / [`PmpxStr`],
+/// the verb numbering, or the error-code semantics really change. The host uses it as its only
+/// hard check and refuses to load when it does not match.
 pub const ABI_VERSION: u32 = 1;
 
-// ---- 错误码 ----
+// ---- Error codes ----
 
-/// 成功。
+/// Success.
 pub const PMPX_OK: u32 = 0;
 
-/// 这个后端不支持该动词。
-/// 宿主对它有**特殊处理**：`pmpx exec` 收到这个码会退化成裸透传，其余动词则原样报错，
-/// 所以它必须与 [`PMPX_ERR_INTERNAL`] 分开。
+/// This backend does not support that verb.
+/// The host treats it specially: `pmpx exec` degrades to passing through verbatim when it sees
+/// this code, while the other verbs report the error as-is, so it must stay separate from
+/// [`PMPX_ERR_INTERNAL`].
 pub const PMPX_ERR_UNSUPPORTED_VERB: u32 = 1;
 
-/// 输入不合法 —— 动词编号不认识、`out` 是空指针、`matched` 里有非 UTF-8。
+/// Invalid input -- an unknown verb number, a null `out`, or non-UTF-8 in `matched`.
 pub const PMPX_ERR_INVALID_ARGS: u32 = 2;
 
-/// 插件内部出错，或者它 panic 了（panic 被 [`guard`] 捕获后归到这里，细节在 stderr 上）。
+/// The plugin failed internally, or it panicked (a panic is caught by [`guard`] and mapped here,
+/// with the details on stderr).
 pub const PMPX_ERR_INTERNAL: u32 = 3;
 
-// ---- 动词编号 ----
+// ---- Verb numbers ----
 
-/// [`Verb::Install`] 的编号。
+/// Number of [`Verb::Install`].
 pub const VERB_INSTALL: u32 = 0;
-/// [`Verb::Remove`] 的编号。
+/// Number of [`Verb::Remove`].
 pub const VERB_REMOVE: u32 = 1;
-/// [`Verb::Run`] 的编号。
+/// Number of [`Verb::Run`].
 pub const VERB_RUN: u32 = 2;
-/// [`Verb::Build`] 的编号。
+/// Number of [`Verb::Build`].
 pub const VERB_BUILD: u32 = 3;
-/// [`Verb::Test`] 的编号。
+/// Number of [`Verb::Test`].
 pub const VERB_TEST: u32 = 4;
-/// [`Verb::Update`] 的编号。
+/// Number of [`Verb::Update`].
 pub const VERB_UPDATE: u32 = 5;
-/// [`Verb::Exec`] 的编号。
+/// Number of [`Verb::Exec`].
 pub const VERB_EXEC: u32 = 6;
 
-// ---- 数据结构 ----
+// ---- Data structures ----
 
-/// 跨边界字符串：**指针 + 长度**，不要求 NUL 结尾。
-/// `ptr` / `len` 是一段**裸字节**（可能是路径或命令行参数），Unix 上完全可以不是合法 UTF-8；
-/// 只有明确要求是文本的地方才校验 UTF-8，失败返回 [`PMPX_ERR_INVALID_ARGS`] 而不是 UB。
-/// 带长度而不是靠 NUL，是因为 `str::as_ptr()` 得到的指针不保证后面跟着 NUL。
+/// A cross-boundary string: pointer + length, with no NUL terminator required.
+/// `ptr` / `len` describe raw bytes (possibly a path or a command-line argument) which on Unix
+/// need not be valid UTF-8; UTF-8 is checked only where the data is explicitly required to be
+/// text, and a failure returns [`PMPX_ERR_INVALID_ARGS`] rather than UB.
+/// It carries a length instead of relying on NUL because the pointer returned by `str::as_ptr()`
+/// is not guaranteed to be followed by a NUL.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PmpxStr {
-    /// 起始地址。`len == 0` 时可以是空指针。
+    /// Start address. May be null when `len == 0`.
     pub ptr: *const u8,
-    /// 字节长度。
+    /// Length in bytes.
     pub len: usize,
 }
 
-// SAFETY: `PmpxStr` 是"一段只读字节 + 长度"，跨线程共享它 unsafe 的地方只在于
-// `ptr` 指向的内存必须仍然有效。而这个结构体的两份来源都是明确的：
-//   - 宿主传进来的：在整个调用期间有效；
-//   - 插件产出的：指向插件泄漏出来的 `Box<[u8]>`，在 `free_str` 之前一直有效。
-// 两者都不会在共享期间被释放或写入。所以把它标成 `Sync` 是成立的。
+// SAFETY: `PmpxStr` is "a read-only byte range plus a length"; the only unsafe part of sharing it
+// across threads is that the memory `ptr` points at must still be valid. Both origins of this
+// struct are well defined:
+//   - one passed in by the host: valid for the whole call;
+//   - one produced by the plugin: points at a `Box<[u8]>` the plugin leaked, valid until
+//     `free_str`.
+// Neither is freed or written while it is shared. So marking it `Sync` holds.
 unsafe impl Sync for PmpxStr {}
 
 impl PmpxStr {
-    /// 空。`len == 0` 且指针为空 —— 在 `cwd` 里表示"没有覆盖"。
+    /// Empty. `len == 0` with a null pointer -- in `cwd` this means "no override".
     pub const EMPTY: PmpxStr = PmpxStr {
         ptr: std::ptr::null(),
         len: 0,
     };
 
-    /// 从一段 `'static` 文本构造（`const` 是为了 `export!` 的 `static` vtable 能在编译期填好）。
+    /// Build from a `'static` string (`const` so that the `static` vtable of `export!` can be
+    /// filled in at compile time).
     pub const fn from_static(s: &'static str) -> Self {
         Self {
             ptr: s.as_ptr(),
@@ -89,58 +100,67 @@ impl PmpxStr {
         }
     }
 
-    /// 是不是空的。
+    /// Whether it is empty.
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 }
 
-/// 跨边界的命令描述。由插件填充、由插件释放（[`free_command`]）；宿主只读。
+/// A command description that crosses the boundary. Filled in by the plugin and freed by the
+/// plugin ([`free_command`]); the host only reads it.
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PmpxCommand {
-    /// 可执行文件。
+    /// Executable.
     pub program: PmpxStr,
-    /// 参数数组，元素个数为 `args_len`。
+    /// Argument array, with `args_len` elements.
     pub args: *const PmpxStr,
-    /// `args` 的元素个数。
+    /// Number of elements in `args`.
     pub args_len: usize,
-    /// 工作目录覆盖。`len == 0` 表示用宿主给的项目根。
+    /// Working-directory override. `len == 0` means use the project root given by the host.
     pub cwd: PmpxStr,
 }
 
-// SAFETY: 同 `PmpxStr` —— 这个结构体只是"若干只读字节的引用 + 一个数组长度"。
+// SAFETY: Same as `PmpxStr` -- this struct is just "references to read-only bytes plus an array
+// length".
 unsafe impl Sync for PmpxCommand {}
 
-/// 插件导出的**唯一**结构，就是那张函数指针表；宿主取到它之后所有交互都走这里的函数指针，
-/// 没有 trait object，也没有 vtable 互转那类 UB。
+/// The only struct a plugin exports, and it is that table of function pointers; once the host has
+/// obtained it, every interaction goes through these pointers, with no trait object and none of
+/// the UB that comes from converting between vtables.
 #[repr(C)]
 pub struct PmpxPluginV1 {
-    /// 必须等于 [`ABI_VERSION`]。宿主第一件事就是比对这个字段。
+    /// Must equal [`ABI_VERSION`]. This is the first field the host compares.
     pub abi_version: u32,
 
-    /// 编出这个插件的 rustc 版本，由 `pmpx-plugin` 的 build.rs 注入。
-    /// **只用于诊断展示，不做硬校验** —— 不同 rustc 编出来的插件在这套 C ABI 下可以安全加载。
+    /// The rustc version that built this plugin, injected by `pmpx-plugin`'s build.rs.
+    /// Diagnostics only, never a hard check -- plugins built by different rustcs can be loaded
+    /// safely under this C ABI.
     pub rustc_version: PmpxStr,
 
-    /// 编出这个插件的 target triple。同样只做诊断。
+    /// The target triple that built this plugin. Also diagnostics only.
     pub target: PmpxStr,
 
-    /// 插件名。内存归插件，宿主读完用 [`free_str`] 释放，并与 manifest 里声明的名字比对
-    /// —— 不一致说明装错了东西。
+    /// Plugin name. The memory belongs to the plugin; the host frees it with [`free_str`] after
+    /// reading, and compares it against the name declared in the manifest -- a mismatch means the
+    /// wrong thing was installed.
     pub name: unsafe extern "C" fn() -> PmpxStr,
 
-    /// 生态分组。内存归插件，宿主读完用 [`free_str`] 释放。
+    /// Ecosystem family. The memory belongs to the plugin; the host frees it with [`free_str`]
+    /// after reading.
     pub family: unsafe extern "C" fn() -> PmpxStr,
 
-    /// 把「动词 + 参数」翻译成一条命令。返回 [`PMPX_OK`] 时 `out` 被填充、宿主用完调
-    /// [`free_command`]；否则返回 `PMPX_ERR_*`，`out` 不动。
+    /// Translate "verb + arguments" into one command. When it returns [`PMPX_OK`], `out` has been
+    /// filled in and the host calls [`free_command`] when done; otherwise it returns `PMPX_ERR_*`
+    /// and `out` is untouched.
     ///
     /// # Safety
-    /// - `project_root` / `matched` / `args` 必须由宿主分配、在调用期间有效且只读；
-    /// - `out` 必须指向一块可写的 [`PmpxCommand`]；
-    /// - **panic 不许穿过这个边界**：从 Rust 1.81 起越过 `extern "C"` 会直接 abort，宿主侧的
-    ///   `catch_unwind` 救不了，所以 `export!` 统一包了 `catch_unwind`。
+    /// - `project_root` / `matched` / `args` must be allocated by the host, valid and read-only
+    ///   for the duration of the call;
+    /// - `out` must point at a writable [`PmpxCommand`];
+    /// - a panic must not cross this boundary: since Rust 1.81, unwinding across `extern "C"`
+    ///   aborts the process and the host's `catch_unwind` cannot save it, so `export!` wraps
+    ///   everything in `catch_unwind`.
     pub command: unsafe extern "C" fn(
         project_root: PmpxStr,
         matched: *const PmpxStr,
@@ -151,48 +171,52 @@ pub struct PmpxPluginV1 {
         out: *mut PmpxCommand,
     ) -> u32,
 
-    /// 释放 [`PmpxPluginV1::name`] / [`PmpxPluginV1::family`] 返回值占的内存。
+    /// Free the memory held by the values returned from [`PmpxPluginV1::name`] /
+    /// [`PmpxPluginV1::family`].
     ///
     /// # Safety
-    /// `s` 必须来自**同一个插件**的产出，且只能释放一次。
+    /// `s` must come from the same plugin and may be freed only once.
     pub free_str: unsafe extern "C" fn(PmpxStr),
 
-    /// 释放 [`PmpxPluginV1::command`] 填充的 [`PmpxCommand`] 占的内存，**不释放它本身**
-    /// （那个结构体在宿主那边）。
+    /// Free the memory filled in by [`PmpxPluginV1::command`]'s [`PmpxCommand`], without freeing
+    /// the struct itself (that struct lives on the host side).
     ///
     /// # Safety
-    /// `c` 必须来自**同一个插件**的一次成功 `command` 调用，且只能释放一次。
+    /// `c` must come from one successful `command` call on the same plugin and may be freed only
+    /// once.
     pub free_command: unsafe extern "C" fn(*mut PmpxCommand),
 }
 
-// SAFETY: 这个结构体是编译期常量填出来的只读表：几个整数、两段 `'static` 字节、
-// 五个函数指针。填好之后从不修改。函数指针本身是 `Sync` 的。
+// SAFETY: This struct is a read-only table filled in from compile-time constants: a few integers,
+// two `'static` byte ranges, and five function pointers. It is never modified after that.
+// Function pointers are `Sync` themselves.
 unsafe impl Sync for PmpxPluginV1 {}
 
-/// 唯一入口符号的名字。
-/// ⚠️ 符号本身由 `pmpx_plugin::export!` 在插件里定义，**不在这里** —— 这个 crate 会被链接进
-/// 每一个插件，它若自己定义同名 `#[no_mangle]` 符号就会和 `export!` 生成的那个撞车。形状是
-/// `extern "C" fn() -> *const PmpxPluginV1`。
+/// Name of the single entry symbol.
+/// The symbol itself is defined inside the plugin by `pmpx_plugin::export!`, not here -- this
+/// crate gets linked into every plugin, and defining the same `#[no_mangle]` symbol itself would
+/// collide with the one `export!` generates. Its shape is
+/// `extern "C" fn() -> *const PmpxPluginV1`.
 pub const ENTRY_SYMBOL: &str = "pmpx_plugin_entry_v1";
 
-// ---- 构建信息（诊断用）----
+// ---- Build info (diagnostics) ----
 
-/// 编译期注入的 rustc 版本。`const fn` 是刻意的：`export!` 生成的 `static` vtable 要在编译期
-/// 求值。
+/// rustc version injected at compile time. `const fn` is deliberate: the `static` vtable that
+/// `export!` generates has to be evaluated at compile time.
 pub const fn build_rustc() -> PmpxStr {
     PmpxStr::from_static(env!("PMPX_BUILD_RUSTC"))
 }
 
-/// 编译期注入的 target triple。
+/// Target triple injected at compile time.
 pub const fn build_target() -> PmpxStr {
     PmpxStr::from_static(env!("PMPX_BUILD_TARGET"))
 }
 
-// ---- 内存：分配与释放 ----
+// ---- Memory: allocation and freeing ----
 
-/// 把一段字节泄漏成 [`PmpxStr`]，交给边界对面去读。
-/// **所有**从插件流出的字符串都用同一种分配（`Box<[u8]>`），这样 [`free_str`] 只有一条路径，
-/// 不会出现"按 `Box<str>` 释放 `Box<[u8]>`"这种 UB。
+/// Leak a byte range into a [`PmpxStr`] for the other side of the boundary to read.
+/// Every string flowing out of the plugin uses the same allocation (`Box<[u8]>`), so [`free_str`]
+/// has exactly one path and cannot end up freeing a `Box<[u8]>` as a `Box<str>`.
 pub fn leak_bytes(bytes: &[u8]) -> PmpxStr {
     let boxed: Box<[u8]> = bytes.to_vec().into_boxed_slice();
     let out = PmpxStr {
@@ -203,31 +227,31 @@ pub fn leak_bytes(bytes: &[u8]) -> PmpxStr {
     out
 }
 
-/// [`leak_bytes`] 的 `&str` 版本。
+/// The `&str` version of [`leak_bytes`].
 pub fn leak_str(s: &str) -> PmpxStr {
     leak_bytes(s.as_bytes())
 }
 
-/// 释放一个由本侧 [`leak_bytes`] / [`leak_str`] 产出的 [`PmpxStr`]。
-/// 空指针直接返回（[`PmpxStr::EMPTY`] 就是这么用的）；长度为 0 但指针非空是合法分配，会正常
-/// 走 `Box::from_raw`。
+/// Free a [`PmpxStr`] produced by this side's [`leak_bytes`] / [`leak_str`].
+/// A null pointer returns immediately (that is how [`PmpxStr::EMPTY`] is used); length 0 with a
+/// non-null pointer is a legitimate allocation and goes through `Box::from_raw` normally.
 ///
 /// # Safety
-/// - `s` 必须来自**本侧**的 `leak_*`，不能是宿主传来的输入；
-/// - 只能释放一次。
+/// - `s` must come from this side's `leak_*`, never from an input the host passed in;
+/// - it may be freed only once.
 pub unsafe fn free_str(s: PmpxStr) {
     if s.ptr.is_null() {
         return;
     }
     let raw = std::ptr::slice_from_raw_parts_mut(s.ptr as *mut u8, s.len);
-    // 与 leak_bytes 里的 Box<[u8]> 严格配对。
+    // Strictly paired with the Box<[u8]> in leak_bytes.
     drop(unsafe { Box::from_raw(raw) });
 }
 
-/// 释放一个由本侧 [`write_command`] 填充的 [`PmpxCommand`] 的内容，**不释放 `c` 本身**
-/// （那个结构体在宿主那边，通常是栈上）。
+/// Free the contents of a [`PmpxCommand`] filled in by this side's [`write_command`], without
+/// freeing `c` itself (that struct lives on the host side, usually on the stack).
 /// # Safety
-/// `c` 必须来自本侧一次成功的 `command` 调用，且只能释放一次。
+/// `c` must come from one successful `command` call on this side and may be freed only once.
 pub unsafe fn free_command(c: *mut PmpxCommand) {
     if c.is_null() {
         return;
@@ -238,7 +262,7 @@ pub unsafe fn free_command(c: *mut PmpxCommand) {
     unsafe { free_str(cmd.cwd) };
 
     if !cmd.args.is_null() && cmd.args_len > 0 {
-        // 与 write_command 里的 Box<[PmpxStr]> 严格配对。
+        // Strictly paired with the Box<[PmpxStr]> in write_command.
         let raw = std::ptr::slice_from_raw_parts_mut(cmd.args as *mut PmpxStr, cmd.args_len);
         let args = unsafe { Box::from_raw(raw) };
         for s in args.iter() {
@@ -247,15 +271,17 @@ pub unsafe fn free_command(c: *mut PmpxCommand) {
     }
 }
 
-// ---- 输入方向：字节 ↔ OsString ----
+// ---- Input direction: bytes <-> OsString ----
 
-/// 把宿主传来的字节读成 `OsString`。
-/// Unix 上路径与命令行参数**可以不是合法 UTF-8**，用 `String` 只能有损转换，会把
-/// `pmpx exec some-tool /latin1/path` 这类调用悄悄改坏，`OsString` 才是无损的裸字节。
-/// Windows 上 `OsString` 底层是 WTF-8，未配对代理项会退化成有损替换 —— 那是平台的边界。
+/// Read the bytes the host passed in as an `OsString`.
+/// On Unix, paths and command-line arguments need not be valid UTF-8, and a `String` can only
+/// convert lossily, which would silently corrupt calls like
+/// `pmpx exec some-tool /latin1/path`; `OsString` keeps the raw bytes losslessly.
+/// On Windows, `OsString` is WTF-8 underneath and unpaired surrogates degrade to lossy
+/// replacement -- that is the platform's boundary.
 ///
 /// # Safety
-/// `s` 必须描述一段在本次调用期间有效的只读内存，或 `len == 0`。
+/// `s` must describe read-only memory that is valid for the duration of this call, or `len == 0`.
 pub unsafe fn read_os(s: PmpxStr) -> OsString {
     if s.len == 0 {
         return OsString::new();
@@ -264,10 +290,11 @@ pub unsafe fn read_os(s: PmpxStr) -> OsString {
     bytes_to_os(bytes)
 }
 
-/// 把宿主传来的字节读成 `&str`，**校验 UTF-8**；失败返回 [`PMPX_ERR_INVALID_ARGS`]，绝不
-/// `from_utf8_unchecked` —— 那等于假定宿主永远正确，而 ABI 的职责恰恰是不做这种假定。
+/// Read the bytes the host passed in as a `&str`, checking UTF-8; a failure returns
+/// [`PMPX_ERR_INVALID_ARGS`], and never `from_utf8_unchecked` -- that would assume the host is
+/// always correct, and the whole job of this ABI is not to make that assumption.
 /// # Safety
-/// 同 [`read_os`]。
+/// Same as [`read_os`].
 pub unsafe fn read_str<'a>(s: PmpxStr) -> Result<&'a str, u32> {
     if s.len == 0 {
         return Ok("");
@@ -276,41 +303,42 @@ pub unsafe fn read_str<'a>(s: PmpxStr) -> Result<&'a str, u32> {
     std::str::from_utf8(bytes).map_err(|_| PMPX_ERR_INVALID_ARGS)
 }
 
-/// 把裸字节转成 `OsString`。
-/// 公开是因为宿主侧也要做同一件事（把 `project_root` 与 `args` 变成字节送过边界），各写一份
-/// 平台 cfg 是必然漂移的重复。Unix 无损；其它平台上 `OsString` 底层是 WTF-8，非 UTF-8 会
-/// 退化成 U+FFFD。
+/// Convert raw bytes into an `OsString`.
+/// Public because the host side does the same thing (turning `project_root` and `args` into bytes
+/// to send across the boundary), and a separate platform `cfg` on each side would be duplication
+/// that inevitably drifts. Lossless on Unix; on other platforms `OsString` is WTF-8 underneath,
+/// so non-UTF-8 degrades to U+FFFD.
 #[cfg(unix)]
 pub fn bytes_to_os(bytes: &[u8]) -> OsString {
     use std::os::unix::ffi::OsStringExt;
     OsString::from_vec(bytes.to_vec())
 }
 
-/// 见 [`bytes_to_os`] 的平台说明。
+/// See [`bytes_to_os`] for the platform notes.
 #[cfg(not(unix))]
 pub fn bytes_to_os(bytes: &[u8]) -> OsString {
     String::from_utf8_lossy(bytes).into_owned().into()
 }
 
-/// 把 `OsStr` 转成裸字节。与 [`bytes_to_os`] 严格配对：Unix 无损，其它平台经
-/// `to_string_lossy`，非 UTF-8 会退化成 U+FFFD。
+/// Convert an `OsStr` into raw bytes. Strictly paired with [`bytes_to_os`]: lossless on Unix, on
+/// the other platforms it goes through `to_string_lossy` and non-UTF-8 degrades to U+FFFD.
 #[cfg(unix)]
 pub fn os_to_bytes(s: &OsStr) -> Vec<u8> {
     use std::os::unix::ffi::OsStrExt;
     s.as_bytes().to_vec()
 }
 
-/// 见 [`os_to_bytes`] 的平台说明。
+/// See [`os_to_bytes`] for the platform notes.
 #[cfg(not(unix))]
 pub fn os_to_bytes(s: &OsStr) -> Vec<u8> {
     s.to_string_lossy().into_owned().into_bytes()
 }
 
-// ---- 输出方向 ----
+// ---- Output direction ----
 
-/// 把一个 [`CommandSpec`] 写成跨边界的形式，**内存由本侧分配**。
+/// Write a [`CommandSpec`] in its cross-boundary form, with the memory allocated by this side.
 /// # Safety
-/// `out` 必须指向一块可写的 [`PmpxCommand`]。
+/// `out` must point at a writable [`PmpxCommand`].
 pub unsafe fn write_command(out: *mut PmpxCommand, spec: CommandSpec) {
     let program = leak_bytes(&os_to_bytes(&spec.program));
 
@@ -339,12 +367,14 @@ pub unsafe fn write_command(out: *mut PmpxCommand, spec: CommandSpec) {
     }
 }
 
-// ---- 调度 ----
+// ---- Dispatch ----
 
-/// 一次 `command` 调用的全部接线：读输入 → 调 [`crate::PackageManager::command`] → 写输出。
-/// 这段逻辑住在这里而不是在 `export!` 宏里，是为了它能被直接测试。
+/// All the wiring of one `command` call: read the inputs, call
+/// [`crate::PackageManager::command`], write the output.
+/// This logic lives here rather than in the `export!` macro so that it can be tested directly.
 /// # Safety
-/// 见 [`PmpxPluginV1::command`] 的 Safety 段。此外 `plugin` 必须是本进程里有效的实例。
+/// See the Safety section of [`PmpxPluginV1::command`]. In addition, `plugin` must be a valid
+/// instance in this process.
 #[allow(clippy::too_many_arguments)]
 pub unsafe fn dispatch_command(
     plugin: &dyn PackageManager,
@@ -366,7 +396,7 @@ pub unsafe fn dispatch_command(
 
     let project_root = PathBuf::from(unsafe { read_os(project_root) });
 
-    // `matched` 是**文本**（manifest 里声明的文件名），所以这里要校验 UTF-8。
+    // `matched` is text (file names declared in the manifest), so UTF-8 is checked here.
     let mut matched_names = Vec::with_capacity(matched_len);
     for i in 0..matched_len {
         let raw = unsafe { *matched.add(i) };
@@ -376,7 +406,7 @@ pub unsafe fn dispatch_command(
         }
     }
 
-    // `args` 是**参数**，可以是任意字节 —— 原样转成 OsString，无损。
+    // `args` are arguments and may be arbitrary bytes -- converted to OsString as-is, losslessly.
     let mut arg_list = Vec::with_capacity(args_len);
     for i in 0..args_len {
         let raw = unsafe { *args.add(i) };
@@ -397,12 +427,14 @@ pub unsafe fn dispatch_command(
     }
 }
 
-/// 把一次跨边界调用包进 `catch_unwind`。
-/// 从 Rust 1.81 起，**让 panic 越过 `extern "C"` 边界会直接 abort**，宿主那边的
-/// `catch_unwind` 完全救不了，所以必须由插件自己兜住。宿主侧还会再包一层，那是为了兜
-/// "插件忘了包"或"插件用 `panic=abort` 编的"。
+/// Wrap one cross-boundary call in `catch_unwind`.
+/// Since Rust 1.81, letting a panic cross an `extern "C"` boundary aborts the process outright,
+/// and the host's `catch_unwind` cannot help at all, so the plugin has to catch it itself. The
+/// host side wraps one more layer, for the cases where "the plugin forgot to wrap" or "the plugin
+/// was built with `panic=abort`".
 pub fn guard(f: impl FnOnce() -> u32) -> u32 {
-    // `AssertUnwindSafe`：拿到 PMPX_ERR_INTERNAL 之后调用方就会中止这次操作，不会继续碰捕获现场。
+    // `AssertUnwindSafe`: once the caller has PMPX_ERR_INTERNAL it aborts the operation and never
+    // touches the caught state again.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(PMPX_ERR_INTERNAL)
 }
 
@@ -412,7 +444,8 @@ mod tests {
 
     #[test]
     fn verb_numbers_match_the_public_enum() {
-        // 编号一旦错位，宿主与插件对"install"的理解就会分叉，而且不会有任何编译错误。
+        // Once the numbering slips, the host and the plugin disagree about "install" and nothing
+        // fails to compile.
         assert_eq!(Verb::Install.to_abi(), VERB_INSTALL);
         assert_eq!(Verb::Remove.to_abi(), VERB_REMOVE);
         assert_eq!(Verb::Run.to_abi(), VERB_RUN);
@@ -449,16 +482,17 @@ mod tests {
 
     #[test]
     fn free_str_tolerates_null() {
-        // EMPTY 会被 free_command 无条件传给 free_str
+        // EMPTY is passed to free_str unconditionally by free_command
         unsafe { free_str(PmpxStr::EMPTY) };
     }
 
     #[test]
     fn leak_and_free_an_empty_string() {
-        // 空串的 Box<[u8]> 是一个悬垂指针（非空、len 0），必须能正常释放
+        // The Box<[u8]> of an empty string is a dangling pointer (non-null, len 0) and must still
+        // free cleanly
         let s = leak_str("");
         assert_eq!(s.len, 0);
-        assert!(!s.ptr.is_null(), "空 Box 的指针是悬垂但非空的");
+        assert!(!s.ptr.is_null(), "an empty Box dangles but is not null");
         unsafe { free_str(s) };
     }
 
@@ -474,7 +508,7 @@ mod tests {
 
     #[test]
     fn read_os_round_trips_valid_utf8() {
-        let bytes = "/tmp/项目/ünïcode".as_bytes();
+        let bytes = "/tmp/projéct/ünïcode".as_bytes();
         let s = PmpxStr {
             ptr: bytes.as_ptr(),
             len: bytes.len(),
@@ -483,8 +517,8 @@ mod tests {
         assert_eq!(os_to_bytes(&got), bytes);
     }
 
-    /// Unix 上路径与参数可以是**任意字节**（0xFF 不是合法 UTF-8，但它是合法的路径字节），
-    /// `OsString` 必须无损保住它们。
+    /// On Unix a path or an argument may be arbitrary bytes (0xFF is not valid UTF-8, but it is a
+    /// legitimate path byte) and `OsString` must keep them losslessly.
     #[cfg(unix)]
     #[test]
     fn read_os_keeps_arbitrary_bytes_on_unix() {
@@ -494,11 +528,11 @@ mod tests {
             len: bytes.len(),
         };
         let got = unsafe { read_os(s) };
-        assert_eq!(os_to_bytes(&got), bytes, "Unix 上必须无损");
+        assert_eq!(os_to_bytes(&got), bytes, "must be lossless on Unix");
     }
 
-    /// 非 Unix 上 `OsString` 底层是 WTF-8，非 UTF-8 会退化成 U+FFFD —— 这是**平台边界**，
-    /// 测试把它钉成"已知行为"而不是假装无事。
+    /// Off Unix, `OsString` is WTF-8 underneath, so non-UTF-8 degrades to U+FFFD -- a platform
+    /// boundary that the test pins down as known behaviour instead of pretending otherwise.
     #[cfg(not(unix))]
     #[test]
     fn read_os_replaces_invalid_utf8_off_unix() {
@@ -510,7 +544,7 @@ mod tests {
         let got = unsafe { read_os(s) };
         let expected = String::from_utf8_lossy(&bytes).into_owned().into_bytes();
         assert_eq!(os_to_bytes(&got), expected);
-        assert_ne!(os_to_bytes(&got), bytes, "非 Unix 上确实是有损的");
+        assert_ne!(os_to_bytes(&got), bytes, "off Unix it really is lossy");
     }
 
     #[test]
@@ -547,7 +581,10 @@ mod tests {
         let mut cmd = unsafe { out.assume_init() };
 
         assert_eq!(cmd.args_len, 0);
-        assert!(cmd.cwd.is_empty(), "没有 cwd 时应当是 EMPTY");
+        assert!(
+            cmd.cwd.is_empty(),
+            "cwd without an override should be EMPTY"
+        );
 
         unsafe { free_command(&mut cmd as *mut _) };
     }
@@ -560,7 +597,7 @@ mod tests {
     #[test]
     fn guard_turns_a_panic_into_internal_error() {
         assert_eq!(guard(|| PMPX_OK), PMPX_OK);
-        assert_eq!(guard(|| panic!("插件炸了")), PMPX_ERR_INTERNAL);
+        assert_eq!(guard(|| panic!("the plugin blew up")), PMPX_ERR_INTERNAL);
     }
 
     #[test]
@@ -574,7 +611,7 @@ mod tests {
         let target = unsafe { std::slice::from_raw_parts(target.ptr, target.len) };
         assert!(
             std::str::from_utf8(rustc).unwrap().contains("rustc"),
-            "rustc_version 应当是 `rustc 1.x.y (...)` 这种形式"
+            "rustc_version should look like `rustc 1.x.y (...)`"
         );
         assert!(std::str::from_utf8(target).unwrap().contains('-'));
     }

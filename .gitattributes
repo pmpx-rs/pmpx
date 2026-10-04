@@ -1,7 +1,7 @@
-# 统一 LF。
+# Always LF.
 * text=auto eol=lf
 
-# 二进制文件不做换行转换
+# Binary files get no newline conversion.
 *.png   binary
 *.ico   binary
 *.dll   binary

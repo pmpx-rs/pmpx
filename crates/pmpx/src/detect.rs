@@ -1,11 +1,12 @@
-//! 检测与裁决。两件事，按顺序：
+//! Detection and resolution. Two steps, in order:
 //!
-//! 1. **打分** —— 每个已装插件在项目根里命中几个特征文件（强证据 100 分，弱证据 10 分）；
-//! 2. **裁决** —— 先选生态（family），再在那个生态里选插件。
+//! 1. **Scoring** — how many detect files each installed plugin matches in the project root
+//!    (strong evidence 100 points, weak evidence 10 points);
+//! 2. **Resolution** — pick a family first, then a plugin inside that family.
 //!
-//! 没有锁文件时判不出生态：库 crate 常把 `Cargo.lock` gitignore 掉，此时 `Cargo.toml`（10）
-//! 与 `package.json`（10）同分，会按 `family_priority` 判成 node。出口是在 `.pmpx.toml`
-//! 里 pin（地板 50），或者调整 `family_priority`。
+//! Without a lockfile the family is undecidable: library crates often gitignore `Cargo.lock`, and
+//! then `Cargo.toml` (10) and `package.json` (10) tie, so `family_priority` resolves them to node.
+//! The escape hatches are pinning in `.pmpx.toml` (floor 50) or reordering `family_priority`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,40 +16,40 @@ use pmpx_plugin::Family;
 use crate::config::{GlobalConfig, MergedProjectConfig};
 use crate::plugins::{InstalledPlugin, PluginSet};
 
-/// 命中一项**强证据**得多少分。
+/// Points for matching one piece of **strong evidence**.
 pub const STRONG_SCORE: u32 = 100;
-/// 命中一项**弱证据**得多少分；它永远压不过一个锁文件（100 分），
-/// 插件作者不必纠结某个文件该放哪一档。
+/// Points for matching one piece of **weak evidence**; it can never outweigh a lockfile
+/// (100 points), so plugin authors need not agonize over which bucket a file belongs in.
 pub const WEAK_SCORE: u32 = 10;
-/// `.pmpx.toml` pin 了某个 family 时，该 family 的**得分地板**。
+/// **Score floor** for a family pinned in `.pmpx.toml`.
 ///
-/// 它比 10 分的清单文件强（能救回没有锁文件的库 crate），比 100 分的锁文件弱
-/// （真有锁文件时不越权）。
+/// Stronger than a 10-point manifest file (it rescues a lockless library crate) and weaker than a
+/// 100-point lockfile (it does not overstep when a real lockfile exists).
 pub const PIN_FLOOR: u32 = 50;
 
-// 地板必须落在弱证据与强证据之间。
+// The floor must sit between weak and strong evidence.
 const _: () = assert!(PIN_FLOOR > WEAK_SCORE);
 const _: () = assert!(PIN_FLOOR < STRONG_SCORE);
 
-// ---- 打分 -----------------------------------------------------------------
+// ---- Scoring ---------------------------------------------------------------
 
-/// 一个插件在某个目录里的得分明细。
+/// One plugin's score breakdown in one directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScoredPlugin {
-    /// crate 名。
+    /// Crate name.
     pub crate_name: String,
-    /// 插件自报名。
+    /// The plugin's self-reported name.
     pub name: String,
-    /// 命中的强证据文件。
+    /// Matched strong-evidence files.
     pub strong_hits: Vec<String>,
-    /// 命中的弱证据文件。
+    /// Matched weak-evidence files.
     pub weak_hits: Vec<String>,
     /// `100 × strong_hits + 10 × weak_hits`
     pub score: u32,
 }
 
 impl ScoredPlugin {
-    /// 在 `dir` 里给一个插件打分。
+    /// Score one plugin inside `dir`.
     pub fn score(plugin: &InstalledPlugin, dir: &Path) -> Self {
         let strong_hits = hits(dir, &plugin.strong);
         let weak_hits = hits(dir, &plugin.weak);
@@ -64,7 +65,7 @@ impl ScoredPlugin {
         }
     }
 
-    /// 命中的全部文件（强 + 弱），给 `info` 显示用。
+    /// All matched files (strong + weak), for `info` to display.
     pub fn all_hits(&self) -> impl Iterator<Item = &str> {
         self.strong_hits
             .iter()
@@ -73,16 +74,16 @@ impl ScoredPlugin {
     }
 }
 
-/// 一个生态的得分与它辖下的插件。
+/// One family's score and the plugins under it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyScore {
-    /// 生态。
+    /// Family.
     pub family: Family,
-    /// `max(辖下插件最高分, pin ? 50 : 0)`
+    /// `max(highest score among its plugins, pin ? 50 : 0)`
     pub score: u32,
-    /// `.pmpx.toml` 是否 pin 了这个生态。
+    /// Whether `.pmpx.toml` pins this family.
     pub pinned: bool,
-    /// 辖下的已装插件（含 0 分的 —— `info` 要把它们显示出来）。
+    /// Installed plugins under it (including 0-point ones — `info` must show them).
     pub plugins: Vec<ScoredPlugin>,
 }
 
@@ -96,11 +97,11 @@ fn hits(dir: &Path, names: &[String]) -> Vec<String> {
     out
 }
 
-/// 给所有已装插件打分，再按生态汇总。
+/// Score every installed plugin, then aggregate by family.
 ///
-/// 返回的 map 里**也会包含**"被 pin 了但一个插件都没装"的生态（得分 = 地板）——
-/// 那种情况必须能被选中，才能报出"缺少能处理该生态的插件"，而不是含糊的
-/// "检测不到项目类型"。
+/// The returned map **also contains** families that are "pinned but have no plugin installed"
+/// (score = floor) — such a case must be selectable, so that pmpx can report "no plugin can handle
+/// this family" instead of a vague "no project type detected".
 pub fn score_all(
     set: &PluginSet,
     root: &Path,
@@ -109,7 +110,7 @@ pub fn score_all(
     let mut families: BTreeMap<Family, FamilyScore> = BTreeMap::new();
 
     for plugin in set.usable() {
-        // `usable()` 保证 family 是 Some
+        // `usable()` guarantees family is Some
         let Some(family) = plugin.family.clone() else {
             continue;
         };
@@ -124,13 +125,13 @@ pub fn score_all(
                 plugins: Vec::new(),
             });
 
-        // 生态分 = 辖下插件的**最高**分，不是求和 —— 四个 Node 后端各命中
-        // `package.json` 只是同一份弱证据被数了四遍。
+        // Family score = the **highest** score among its plugins, not the sum — four Node backends
+        // each matching `package.json` is just the same weak evidence counted four times.
         entry.score = entry.score.max(scored.score);
         entry.plugins.push(scored);
     }
 
-    // pin 地板在插件分算完之后应用，所以是 max 而不是覆盖。
+    // The pin floor is applied after plugin scores are computed, hence max and not an overwrite.
     for (family, fs) in families.iter_mut() {
         if merged.pinned_plugin(family.as_str()).is_some() {
             fs.pinned = true;
@@ -138,7 +139,7 @@ pub fn score_all(
         }
     }
 
-    // 被 pin 但没装插件的生态也要进场。
+    // Families that are pinned but have no plugin installed must be present too.
     for name in merged.pinned_families() {
         let family = Family::new(name.to_string());
         families
@@ -158,75 +159,78 @@ pub fn score_all(
     families
 }
 
-// ---- 裁决 -----------------------------------------------------------------
+// ---- Resolution ------------------------------------------------------------
 
-/// 裁决结果。
+/// The resolution result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
-    /// 胜出插件的 crate 名（加载时用它定位目录）。
+    /// Crate name of the winning plugin (used to locate its directory when loading).
     pub crate_name: String,
-    /// 胜出插件自报名。
+    /// The winning plugin's self-reported name.
     pub name: String,
-    /// 胜出生态。
+    /// The winning family.
     pub family: Family,
-    /// 胜出插件的得分（用于 `info`）。
+    /// The winning plugin's score (for `info`).
     pub score: u32,
-    /// 给用户看的提示；`--quiet` 会关掉它们。
+    /// Notes shown to the user; `--quiet` turns them off.
     pub notes: Vec<String>,
 }
 
-/// 选不出来时的原因。
+/// Why no selection could be made.
 ///
-/// 每一个变体都对应一句**能指导下一步**的话。
+/// Every variant corresponds to one sentence that **tells the user what to do next**.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetectFailure {
-    /// 所有候选都是 0 分，而且没有任何 pin。
+    /// Every candidate scored 0 and nothing is pinned.
     NothingDetected,
-    /// `.pmpx.toml` pin 了一个没装的插件。
+    /// `.pmpx.toml` pins a plugin that is not installed.
     PinnedNotInstalled {
-        /// 生态名。
+        /// Family name.
         family: String,
-        /// pin 的插件名。
+        /// The pinned plugin name.
         name: String,
     },
-    /// `.pmpx.toml` pin 的插件**装了**，但它不能参与裁决。
+    /// The plugin pinned in `.pmpx.toml` **is** installed, but cannot take part in resolution.
     ///
-    /// 与 [`DetectFailure::PinnedNotInstalled`] 分开是因为下一步动作完全不同：
-    /// "没装"要去装，"装了但坏了"要去看 `pmpx plugin ls` 里标出来的原因。
+    /// Kept separate from [`DetectFailure::PinnedNotInstalled`] because the next step is completely
+    /// different: "not installed" means go install it, "installed but broken" means look at the
+    /// reason shown in `pmpx plugin ls`.
     PluginUnusable {
-        /// 插件名。
+        /// Plugin name.
         name: String,
-        /// 它为什么不能用。
+        /// Why it cannot be used.
         problem: String,
     },
-    /// `-p` 指定的插件不存在（或不能参与裁决）。
+    /// The plugin named by `-p` does not exist (or cannot take part in resolution).
     UnknownPlugin {
-        /// 用户给的名字。
+        /// The name the user gave.
         name: String,
-        /// 可选项，已经排好序。
+        /// The available choices, already sorted.
         available: Vec<String>,
     },
-    /// 胜出的生态里一个可用的插件都没有。
+    /// The winning family has no usable plugin at all.
     ///
-    /// **防御性分支**：正常路径下走不到 —— 生态分要么来自插件（那就有插件），
-    /// 要么来自 pin（那就会先被上面两个变体拦下）。给一句有用的话比 `unreachable!()` 好。
+    /// **Defensive branch**: unreachable on the normal path — a family score either comes from a
+    /// plugin (then it has one) or from a pin (then it is caught by the two variants above first).
+    /// A useful sentence beats `unreachable!()`.
     FamilyWithoutPlugin {
-        /// 生态名。
+        /// Family name.
         family: String,
-        /// 该生态的得分。
+        /// That family's score.
         score: u32,
     },
 }
 
-/// 按 `order` 表给 `name` 排名。**不在表里的排最后**。
+/// Rank `name` against the `order` table. **Names not in the table rank last**.
 fn rank(order: &[String], name: &str) -> usize {
     order.iter().position(|x| x == name).unwrap_or(order.len())
 }
 
-/// 完整的裁决。
+/// The full resolution.
 ///
-/// `explicit` 是 `-p/--plugin` 的值：**它压过包括 `.pmpx.toml` 在内的一切** ——
-/// `-p` 是一次性临时覆盖，`.pmpx.toml` 是持久固化，临时的那次应当赢。
+/// `explicit` is the value of `-p/--plugin`: **it overrides everything, including `.pmpx.toml`** —
+/// `-p` is a one-off temporary override and `.pmpx.toml` is a durable pin, so the temporary one
+/// should win.
 pub fn select(
     set: &PluginSet,
     root: &Path,
@@ -234,7 +238,7 @@ pub fn select(
     global: &GlobalConfig,
     explicit: Option<&str>,
 ) -> Result<Selection, DetectFailure> {
-    // 第 0 层：-p 直接指定。跳过后面全部裁决。
+    // Layer 0: -p names it directly. Every later resolution step is skipped.
     if let Some(name) = explicit {
         let Some(plugin) = set.by_name(name) else {
             return Err(DetectFailure::UnknownPlugin {
@@ -254,12 +258,12 @@ pub fn select(
             name: plugin.name.clone(),
             family,
             score: 0,
-            // `-p` 是用户明确要的，没有任何歧义要提示
+            // `-p` is what the user explicitly asked for; there is no ambiguity to flag
             notes: Vec::new(),
         });
     }
 
-    // 第 1 层：选 family
+    // Layer 1: pick the family
     let families = score_all(set, root, merged);
 
     let mut candidates: Vec<FamilyScore> = families.into_values().filter(|f| f.score > 0).collect();
@@ -268,8 +272,8 @@ pub fn select(
         return Err(DetectFailure::NothingDetected);
     }
 
-    // 排序键：得分降序 → family_priority 名次升序 → 名字典序。
-    // 最后一条保证未列出的生态也拿到一个确定的次序。
+    // Sort keys: score descending → family_priority rank ascending → name lexicographic.
+    // The last one gives unlisted families a deterministic order too.
     candidates.sort_by(|a, b| {
         b.score
             .cmp(&a.score)
@@ -283,7 +287,8 @@ pub fn select(
     let winner = candidates.remove(0);
     let mut notes = Vec::new();
 
-    // 同分就提示 —— 不是因为结果不确定，而是因为用户可能想要另一个。
+    // A tie is reported — not because the result is uncertain, but because the user may want the
+    // other one.
     if candidates.first().is_some_and(|r| r.score == winner.score) {
         let tied: Vec<&str> = std::iter::once(winner.family.as_str())
             .chain(
@@ -294,17 +299,17 @@ pub fn select(
             )
             .collect();
         notes.push(format!(
-            "检测到多个候选（{} 同为 {} 分），已选 {}",
+            "Multiple candidates detected ({} tied at {} points), selected {}",
             tied.join(" / "),
             winner.score,
             winner.family
         ));
     }
 
-    // 第 2 层：在该 family 内选插件
+    // Layer 2: pick a plugin within that family
     let family_name = winner.family.as_str().to_string();
 
-    // 2-a：`.pmpx.toml` 的 `[plugin] <family> = "<name>"`
+    // 2-a: `.pmpx.toml`'s `[plugin] <family> = "<name>"`
     if let Some(pinned) = merged.pinned_plugin(&family_name) {
         if let Some(p) = winner.plugins.iter().find(|p| p.name == pinned) {
             return Ok(Selection {
@@ -316,15 +321,16 @@ pub fn select(
             });
         }
 
-        // 不在这个生态的可用列表里 —— 有两种截然不同的原因，必须分开报。
+        // Not in this family's usable list — there are two very different reasons, which must be
+        // reported separately.
         if let Some(existing) = set.by_name(pinned) {
-            // 装了，但它自己不可用（缺 family / detect 段是空的），
-            // 或者它声明的生态与 `.pmpx.toml` 里写的那一行对不上。
+            // It is installed but unusable itself (missing family / empty detect section), or the
+            // family it declares does not match the line written in `.pmpx.toml`.
             return Err(DetectFailure::PluginUnusable {
                 name: pinned.to_string(),
                 problem: existing
                     .problem()
-                    .unwrap_or("它声明的 family 与 .pmpx.toml 里写的不一致")
+                    .unwrap_or("its declared family does not match the one written in .pmpx.toml")
                     .to_string(),
             });
         }
@@ -335,7 +341,7 @@ pub fn select(
         });
     }
 
-    // 2-b：得分最高者。0 分的不参与。
+    // 2-b: the highest score. 0-point entries do not take part.
     let mut ranked: Vec<&ScoredPlugin> = winner.plugins.iter().filter(|p| p.score > 0).collect();
 
     if ranked.is_empty() {
@@ -361,7 +367,7 @@ pub fn select(
             .map(|p| p.name.as_str())
             .collect();
         notes.push(format!(
-            "检测到多个候选（{} 同为 {} 分），已选 {}",
+            "Multiple candidates detected ({} tied at {} points), selected {}",
             tied.join(" / "),
             ranked[0].score,
             ranked[0].name
@@ -379,34 +385,34 @@ pub fn select(
 }
 
 impl DetectFailure {
-    /// 给用户看的完整说明，必须包含下一步该做什么。
+    /// The full explanation shown to the user; it must include what to do next.
     pub fn message(&self) -> String {
         match self {
-            DetectFailure::NothingDetected => "检测不到项目类型。\n\
-                 pmpx 靠**已安装插件**声明的特征文件来判断项目类型，所以：\n\
-                   · 还没装插件时，任何项目都检测不出来（`pmpx plugin add <name>`）\n\
-                   · 也可以在当前目录写一个 .pmpx.toml 显式声明，例如：\n\
+            DetectFailure::NothingDetected => "Cannot detect the project type.\n\
+                 pmpx decides the project type from the detect files declared by installed plugins, so:\n\
+                   - with no plugin installed, no project can be detected (`pmpx plugin add <name>`)\n\
+                   - you can also declare it explicitly with a .pmpx.toml in the current directory, for example:\n\
                      [plugin]\n\
                      rust = \"cargo\""
                 .to_string(),
             DetectFailure::FamilyWithoutPlugin { family, score } => format!(
-                "胜出的生态是 {family}（{score} 分），但没有安装任何属于它的插件。\n\
-                 装上之后 pmpx 才知道该调用哪个工具。"
+                "The winning family is {family} ({score} points), but no plugin belonging to it is installed.\n\
+                 pmpx only knows which tool to invoke once one is installed."
             ),
             DetectFailure::PinnedNotInstalled { family, name } => format!(
-                ".pmpx.toml 里把 {family} 固化成了 {name}，但它没有安装。\n\
-                 要么装它（`pmpx plugin add {name}`），要么改掉那条固化。"
+                ".pmpx.toml pins {family} to {name}, but it is not installed.\n\
+                 Either install it (`pmpx plugin add {name}`) or change that pin."
             ),
             DetectFailure::PluginUnusable { name, problem } => format!(
-                "{name} 装了，但不能参与裁决：{problem}。\n\
-                 用 `pmpx plugin ls` 看全部插件与它们各自的问题。"
+                "{name} is installed but cannot take part in resolution: {problem}.\n\
+                 Use `pmpx plugin ls` to see every plugin and its own problem."
             ),
             DetectFailure::UnknownPlugin { name, available } => {
-                let mut msg = format!("找不到插件 {name}。");
+                let mut msg = format!("Plugin {name} not found.");
                 if available.is_empty() {
-                    msg.push_str("\n当前一个插件都没装（`pmpx plugin add <name>`）。");
+                    msg.push_str("\nNo plugin is installed at all (`pmpx plugin add <name>`).");
                 } else {
-                    msg.push_str("\n已装的是：");
+                    msg.push_str("\nInstalled: ");
                     msg.push_str(&available.join(", "));
                 }
                 msg
@@ -415,8 +421,9 @@ impl DetectFailure {
     }
 }
 
-/// 选不出来 = **退出码 3**：pmpx 本身没问题，是环境里缺东西。
-/// 用户的脚本该能靠这个码把"pmpx 坏了"（1）和"你还没装东西"（3）分开。
+/// Nothing selected = **exit code 3**: pmpx itself is fine, the environment is missing something.
+/// User scripts should be able to use this code to tell "pmpx is broken" (1) from "you have not
+/// installed anything yet" (3).
 impl From<DetectFailure> for crate::error::PmpxError {
     fn from(f: DetectFailure) -> Self {
         crate::error::PmpxError::NotFound(f.message())
@@ -450,7 +457,8 @@ mod tests {
         )
     }
 
-    /// 建一个场景：装若干插件 + 在项目目录里放若干文件（`files` 相对项目根）。
+    /// Build a scenario: install several plugins and place several files in the project dir
+    /// (`files` are relative to the project root).
     fn fixture(plugins: &[(&str, &str, &[&str], &[&str])], files: &[&str]) -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
@@ -489,7 +497,7 @@ mod tests {
         }
     }
 
-    /// 全部官方插件的 detect 声明。
+    /// The detect declarations of all official plugins.
     fn official() -> Vec<(
         &'static str,
         &'static str,
@@ -540,14 +548,14 @@ mod tests {
 
     fn pick(fx: &Fixture, pins: &[(&str, &str)], explicit: Option<&str>) -> Selection {
         select(&fx.set, &fx.project, &merged(pins), &fx.global, explicit)
-            .unwrap_or_else(|e| panic!("应当选得出来：{}", e.message()))
+            .unwrap_or_else(|e| panic!("should have selected something: {}", e.message()))
     }
 
     fn fail(fx: &Fixture, pins: &[(&str, &str)], explicit: Option<&str>) -> DetectFailure {
         select(&fx.set, &fx.project, &merged(pins), &fx.global, explicit).unwrap_err()
     }
 
-    // ---- 打分 -------------------------------------------------------------
+    // ---- Scoring -------------------------------------------------------------
 
     #[test]
     fn scoring_is_one_hundred_per_strong_and_ten_per_weak() {
@@ -574,7 +582,7 @@ mod tests {
         assert_eq!(ScoredPlugin::score(cargo, &fx.project).score, 0);
     }
 
-    // ---- 典型场景对照 ------------------------------------------------------
+    // ---- Typical scenario comparisons --------------------------------------
 
     #[test]
     fn scenario_cargo_toml_only_picks_cargo() {
@@ -593,14 +601,14 @@ mod tests {
         assert_eq!(s.score, 110);
     }
 
-    /// 只有一个 `package.json` 时四个后端都是 10 分 → 按 `priority` 选 pnpm。
+    /// With only a `package.json` all four backends score 10 → `priority` picks pnpm.
     #[test]
     fn scenario_package_json_alone_falls_back_to_pnpm() {
         let fx = fixture(&official(), &["package.json"]);
         let s = pick(&fx, &[], None);
         assert_eq!(s.name, "pnpm");
         assert_eq!(s.score, 10);
-        assert!(!s.notes.is_empty(), "同分必须有提示（5.4）");
+        assert!(!s.notes.is_empty(), "a tie must produce a note");
     }
 
     #[test]
@@ -618,8 +626,8 @@ mod tests {
         assert_eq!(s.name, "npm");
     }
 
-    /// 混合项目：10 vs 10 → 默认 `family_priority` 把 node 排在前面 → 走 node。
-    /// 这不是硬编码规则，是那个数组的自然结果。
+    /// Mixed project: 10 vs 10 → the default `family_priority` puts node first → node is used.
+    /// This is not a hard-coded rule, it is the natural result of that array.
     #[test]
     fn scenario_mixed_at_ten_ten_goes_to_node() {
         let fx = fixture(&official(), &["Cargo.toml", "package.json"]);
@@ -628,7 +636,7 @@ mod tests {
         assert_eq!(s.name, "pnpm");
     }
 
-    /// 把 rust 提到 family_priority 首位，同一个项目就走 cargo。
+    /// Move rust to the front of family_priority and the same project goes to cargo.
     #[test]
     fn scenario_mixed_follows_family_priority() {
         let mut fx = fixture(&official(), &["Cargo.toml", "package.json"]);
@@ -638,7 +646,7 @@ mod tests {
         assert_eq!(
             s.family,
             Family::RUST,
-            "改一个数组就能改默认行为 —— 这正是它不该被硬编码的理由"
+            "changing one array changes the default behaviour"
         );
     }
 
@@ -653,9 +661,9 @@ mod tests {
         assert_eq!(s.name, "pnpm");
     }
 
-    // ---- pin 地板 ----------------------------------------------------------
+    // ---- The pin floor ------------------------------------------------------
 
-    /// 库 crate 误判的出口：pin 50 > 10。
+    /// The escape hatch for a misdetected library crate: pin 50 > 10.
     #[test]
     fn scenario_pin_rescues_a_lockless_library_crate() {
         let fx = fixture(&official(), &["Cargo.toml", "package.json"]);
@@ -667,13 +675,17 @@ mod tests {
         assert_eq!(s.name, "cargo");
     }
 
-    /// 但 pin **压不过锁文件** —— 真有锁文件时它不越权。
+    /// But a pin **does not beat a lockfile** — with a real lockfile it does not overstep.
     #[test]
     fn a_pin_does_not_beat_a_lockfile() {
         let fx = fixture(&official(), &["Cargo.toml", "Cargo.lock", "package.json"]);
         let s = pick(&fx, &[("node", "pnpm")], None);
 
-        assert_eq!(s.family, Family::RUST, "110 分压过 50 分的地板");
+        assert_eq!(
+            s.family,
+            Family::RUST,
+            "110 points beats the 50-point floor"
+        );
         assert_eq!(s.score, 110);
     }
 
@@ -692,19 +704,22 @@ mod tests {
 
         assert_eq!(node.score, PIN_FLOOR);
         assert!(node.pinned);
-        // 地板由文件顶部那两条编译期断言钉住
+        // The floor is nailed down by the two compile-time assertions at the top of the file
     }
 
-    // ---- 第 0 层：-p -------------------------------------------------------
+    // ---- Layer 0: -p -------------------------------------------------------
 
     #[test]
     fn explicit_plugin_overrides_the_pin() {
         let fx = fixture(&official(), &["Cargo.toml", "Cargo.lock"]);
-        // 项目明明是 rust，但 -p 说了算
+        // The project is clearly rust, but -p has the final say
         let s = pick(&fx, &[], Some("npm"));
         assert_eq!(s.name, "npm");
         assert_eq!(s.family, Family::NODE);
-        assert!(s.notes.is_empty(), "-p 是明确的，不该有歧义提示");
+        assert!(
+            s.notes.is_empty(),
+            "-p is explicit, there should be no ambiguity note"
+        );
     }
 
     #[test]
@@ -723,11 +738,11 @@ mod tests {
                 assert!(available.contains(&"cargo".to_string()));
                 assert!(available.contains(&"pnpm".to_string()));
             }
-            other => panic!("期望 UnknownPlugin，得到 {other:?}"),
+            other => panic!("expected UnknownPlugin, got {other:?}"),
         }
     }
 
-    // ---- 失败路径 ----------------------------------------------------------
+    // ---- Failure paths ------------------------------------------------------
 
     #[test]
     fn no_files_and_no_pin_detects_nothing() {
@@ -741,11 +756,12 @@ mod tests {
         assert_eq!(
             fail(&fx, &[], None),
             DetectFailure::NothingDetected,
-            "零插件时检测必须一无所获 —— ECOSYSTEM_HINTS 不参与裁决"
+            "with zero plugins detection must find nothing — ECOSYSTEM_HINTS takes no part in resolution"
         );
     }
 
-    /// pin 的生态一个插件都没装 → 报"没装"，不是含糊的"检测不到"。
+    /// A pinned family with no plugin installed → reports "not installed", not a vague
+    /// "not detected".
     #[test]
     fn a_pinned_family_with_no_plugins_names_the_plugin_it_wants() {
         let fx = fixture(&official(), &[]);
@@ -754,11 +770,12 @@ mod tests {
                 assert_eq!(family, "python");
                 assert_eq!(name, "poetry");
             }
-            other => panic!("期望 PinnedNotInstalled，得到 {other:?}"),
+            other => panic!("expected PinnedNotInstalled, got {other:?}"),
         }
     }
 
-    /// pin 的插件**装了但坏了**时，不能报成"没装" —— 下一步动作完全不同。
+    /// When the pinned plugin **is installed but broken**, it must not be reported as "not
+    /// installed" — the next step is completely different.
     #[test]
     fn pinning_a_broken_plugin_says_it_is_broken_not_missing() {
         let fx = fixture(
@@ -770,7 +787,7 @@ mod tests {
             )],
             &["package.json"],
         );
-        // 手工把那份 manifest 改成缺 family 的坏插件
+        // Hand-edit that manifest into a broken plugin missing family
         let bad = fx.set.by_name("pnpm").unwrap().dir.join("pmpx-plugin.toml");
         std::fs::write(
             &bad,
@@ -778,7 +795,7 @@ mod tests {
         )
         .unwrap();
 
-        // 重新读一遍清单
+        // Read the manifest again
         let cfg = crate_plugin_kit::KitConfig::new("pmpx")
             .with_data_dir(
                 fx.set
@@ -805,13 +822,13 @@ mod tests {
                 assert_eq!(name, "pnpm");
                 assert!(problem.contains("family"), "{problem}");
             }
-            other => panic!("期望 PluginUnusable，得到 {other:?}"),
+            other => panic!("expected PluginUnusable, got {other:?}"),
         }
     }
 
     #[test]
     fn pinning_a_plugin_that_is_not_installed_is_reported() {
-        // 只装 pnpm，却 pin 成 npm
+        // Only pnpm is installed, but it is pinned to npm
         let fx = fixture(
             &[(
                 "pmpx-plugin-pnpm",
@@ -826,13 +843,14 @@ mod tests {
                 assert_eq!(family, "node");
                 assert_eq!(name, "npm");
             }
-            other => panic!("期望 PinnedNotInstalled，得到 {other:?}"),
+            other => panic!("expected PinnedNotInstalled, got {other:?}"),
         }
     }
 
-    // ---- 排序的确定性 ------------------------------------------------------
+    // ---- Determinism of ordering --------------------------------------------
 
-    /// 两个都没列进 `family_priority` 的生态同分时，靠名字典序拿到确定的次序。
+    /// When two families absent from `family_priority` tie, name order gives a deterministic
+    /// result.
     #[test]
     fn unlisted_families_fall_back_to_name_order() {
         let fx = fixture(
@@ -844,8 +862,12 @@ mod tests {
         );
 
         let s = pick(&fx, &[], None);
-        assert_eq!(s.family.as_str(), "alpha", "未列出的按名字典序");
-        assert!(!s.notes.is_empty(), "同分仍要提示");
+        assert_eq!(
+            s.family.as_str(),
+            "alpha",
+            "unlisted ones follow name order"
+        );
+        assert!(!s.notes.is_empty(), "a tie still produces a note");
     }
 
     #[test]
@@ -853,7 +875,7 @@ mod tests {
         let order = vec!["node".to_string(), "rust".to_string()];
         assert_eq!(rank(&order, "node"), 0);
         assert_eq!(rank(&order, "rust"), 1);
-        assert_eq!(rank(&order, "python"), 2, "未列出的排最后");
+        assert_eq!(rank(&order, "python"), 2, "unlisted ones rank last");
     }
 
     #[test]
@@ -867,10 +889,13 @@ mod tests {
         );
 
         let s = pick(&fx, &[], None);
-        assert_eq!(s.name, "pnpm", "priority 表里的赢过不在表里的");
+        assert_eq!(
+            s.name, "pnpm",
+            "the one in the priority table beats the one that is not"
+        );
     }
 
-    /// 每个失败原因都得给出可执行的下一步。
+    /// Every failure reason must give an actionable next step.
     #[test]
     fn every_failure_message_is_actionable() {
         let cases = [
@@ -885,7 +910,7 @@ mod tests {
             },
             DetectFailure::PluginUnusable {
                 name: "pnpm".into(),
-                problem: "manifest 没有声明 family".into(),
+                problem: "manifest does not declare a family".into(),
             },
             DetectFailure::UnknownPlugin {
                 name: "x".into(),
@@ -899,15 +924,13 @@ mod tests {
             assert!(
                 msg.contains("pmpx plugin")
                     || msg.contains(".pmpx.toml")
-                    || msg.contains("没装")
-                    || msg.contains("装上")
-                    || msg.contains("已装"),
-                "这条消息没告诉用户下一步做什么：{msg}"
+                    || msg.to_lowercase().contains("install"),
+                "this message does not tell the user what to do next: {msg}"
             );
         }
     }
 
-    // ---- 其它 --------------------------------------------------------------
+    // ---- Misc --------------------------------------------------------------
 
     #[test]
     fn score_all_includes_zero_score_plugins_for_display() {
@@ -915,8 +938,12 @@ mod tests {
         let families = score_all(&fx.set, &fx.project, &merged(&[]));
 
         let node = families.get(&Family::NODE).unwrap();
-        assert_eq!(node.score, 0, "node 这边一分没有");
-        assert_eq!(node.plugins.len(), 4, "但四个插件仍要列出来给 info 看");
+        assert_eq!(node.score, 0, "node has no points at all");
+        assert_eq!(
+            node.plugins.len(),
+            4,
+            "but all four plugins are still listed for info"
+        );
     }
 
     #[test]

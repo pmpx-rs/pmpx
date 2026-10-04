@@ -1,8 +1,9 @@
-//! 已安装插件的清单。
+//! The manifest of installed plugins.
 //!
-//! 这个模块只把 `~/.pmpx/plugins/*/pmpx-plugin.toml` 读成结构体，**不加载任何动态库** ——
-//! 检测必须在"插件是坏的 / ABI 不匹配 / 是别的平台编的"情况下照样给出答案，
-//! 加载是选中之后才发生的事（见 [`crate::runtime`]）。
+//! This module only reads `~/.pmpx/plugins/*/pmpx-plugin.toml` into structs and **loads no dynamic
+//! library** — detection must still give an answer when a plugin is broken / ABI-mismatched /
+//! built for another platform. Loading happens only after a plugin has been selected
+//! (see [`crate::runtime`]).
 
 use std::path::{Path, PathBuf};
 
@@ -11,59 +12,61 @@ use crate_plugin_kit::{CratePluginKit, PluginInfo, PluginManifest};
 use pmpx_plugin::abi::PmpxPluginV1;
 use pmpx_plugin::Family;
 
-/// 一个已安装插件的清单信息。
+/// Manifest information of one installed plugin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledPlugin {
-    /// 插件自报名（manifest 的 `plugin.name`，例如 `pnpm`）。
+    /// The plugin's self-reported name (the manifest's `plugin.name`, e.g. `pnpm`).
     ///
-    /// manifest 是这个名字的权威来源；加载之后 `PackageManager::name()` 必须与它相等，
-    /// 否则拒绝加载。
+    /// The manifest is the authority for this name; after loading, `PackageManager::name()` must
+    /// equal it, otherwise loading is refused.
     pub name: String,
 
-    /// 完整 crate 名（`pmpx-plugin-pnpm`）。
+    /// Full crate name (`pmpx-plugin-pnpm`).
     pub crate_name: String,
 
-    /// 版本。
+    /// Version.
     pub version: String,
 
-    /// 生态。`None` 表示 manifest 没声明 —— 见 [`InstalledPlugin::problem`]。
+    /// Family. `None` means the manifest did not declare one — see [`InstalledPlugin::problem`].
     pub family: Option<Family>,
 
-    /// manifest 声明的 ABI 版本。
+    /// The ABI version declared by the manifest.
     pub abi: Option<u32>,
 
-    /// 安装目录。
+    /// Install directory.
     pub dir: PathBuf,
 
-    /// 强证据（100 分/项）：证明这个后端确实被用过。
+    /// Strong evidence (100 points each): proves this backend has really been used.
     pub strong: Vec<String>,
 
-    /// 弱证据（10 分/项）：只能证明属于这个生态。
+    /// Weak evidence (10 points each): only proves the project belongs to this family.
     pub weak: Vec<String>,
 }
 
 impl InstalledPlugin {
-    /// 这个插件能不能参与检测与裁决。
+    /// Whether this plugin can take part in detection and resolution.
     ///
-    /// `plugin ls` 会显示不能的原因 —— "装了但没生效"是最难自己诊断的一类问题。
+    /// `plugin ls` shows the reason when it cannot — "installed but not in effect" is the hardest
+    /// class of problem to diagnose on your own.
     pub fn is_usable(&self) -> bool {
         self.problem().is_none()
     }
 
-    /// 它为什么不能参与裁决。
+    /// Why it cannot take part in resolution.
     pub fn problem(&self) -> Option<&'static str> {
         match self.family {
-            // family 决定 `plugin ls` 分组、`plugin set` 作用域与 `.pmpx.toml` 的键名，
-            // 缺了它插件无法被任何一层选中 —— 与其猜一个生态，不如明确说缺了。
-            None => Some("manifest 没有声明 family，无法参与生态裁决"),
+            // family decides `plugin ls` grouping, the scope of `plugin set`, and the key names in
+            // `.pmpx.toml`; without it the plugin cannot be selected by any layer — better to say
+            // it is missing than to guess a family.
+            None => Some("the manifest does not declare a family, so it cannot take part in family resolution"),
             Some(_) if self.strong.is_empty() && self.weak.is_empty() => {
-                Some("manifest 的 [detect] 段是空的，永远不会被检测命中")
+                Some("the manifest's [detect] section is empty, so detection will never match it")
             }
             Some(_) => None,
         }
     }
 
-    /// 这个插件声明的全部特征文件。
+    /// Every detect file this plugin declares.
     pub fn detect_names(&self) -> impl Iterator<Item = &str> {
         self.strong
             .iter()
@@ -72,17 +75,17 @@ impl InstalledPlugin {
     }
 }
 
-/// 本机已安装的全部插件。
+/// Every plugin installed on this machine.
 #[derive(Debug, Clone, Default)]
 pub struct PluginSet {
-    /// 按 crate 名排序，保证输出稳定。
+    /// Sorted by crate name to keep output stable.
     pub plugins: Vec<InstalledPlugin>,
 }
 
 impl PluginSet {
-    /// 从插件库里读一遍（只读 manifest）。
+    /// Read once from the plugin store (manifest only).
     pub fn load(kit: &CratePluginKit<PmpxPluginV1>) -> Result<Self> {
-        let infos = kit.list().context("扫描插件目录失败")?;
+        let infos = kit.list().context("failed to scan the plugin directory")?;
 
         let mut plugins = Vec::with_capacity(infos.len());
         for info in infos {
@@ -93,25 +96,26 @@ impl PluginSet {
         Ok(Self { plugins })
     }
 
-    /// 参与裁决的那些。
+    /// Those that take part in resolution.
     pub fn usable(&self) -> impl Iterator<Item = &InstalledPlugin> {
         self.plugins.iter().filter(|p| p.is_usable())
     }
 
-    /// 按自报名找。名字取自 manifest，与 `pmpx -p <name>` 的口径一致。
+    /// Find by self-reported name. The name comes from the manifest, matching `pmpx -p <name>`.
     pub fn by_name(&self, name: &str) -> Option<&InstalledPlugin> {
         self.plugins.iter().find(|p| p.name == name)
     }
 
-    /// 按 crate 名找。
+    /// Find by crate name.
     pub fn by_crate_name(&self, crate_name: &str) -> Option<&InstalledPlugin> {
         self.plugins.iter().find(|p| p.crate_name == crate_name)
     }
 
-    /// 所有插件声明的特征文件名，去重。
+    /// Every detect file name declared by any plugin, deduplicated.
     ///
-    /// 一个目录里有其中任何一个，它看起来就是个项目根。这里不分 strong / weak ——
-    /// 项目根是结构判断，`package.json` 与 `pnpm-lock.yaml` 在这件事上同样有效。
+    /// A directory containing any one of them looks like a project root. strong / weak is not
+    /// distinguished here — the project root is a structural judgement, and `package.json` and
+    /// `pnpm-lock.yaml` are equally valid for it.
     pub fn detect_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.usable().flat_map(|p| p.detect_names()).collect();
         names.sort_unstable();
@@ -119,9 +123,10 @@ impl PluginSet {
         names
     }
 
-    /// 这个目录看起来是不是一个项目根。
+    /// Whether this directory looks like a project root.
     pub fn marks_root(&self, dir: &Path) -> bool {
-        // `.pmpx.toml` 本身就是"我在这里声明这是个项目"—— 它比任何清单文件都强。
+        // `.pmpx.toml` itself is "I declare this is a project here" — stronger than any manifest
+        // file.
         if dir.join(".pmpx.toml").is_file() {
             return true;
         }
@@ -131,10 +136,11 @@ impl PluginSet {
     }
 }
 
-/// 把一条 [`PluginInfo`] 补全成 [`InstalledPlugin`]（再读一次 manifest 拿 `[detect]`）。
+/// Complete a [`PluginInfo`] into an [`InstalledPlugin`] (reading the manifest again for `[detect]`).
 fn read_one(kit: &CratePluginKit<PmpxPluginV1>, info: &PluginInfo) -> Result<InstalledPlugin> {
-    // `list()` 刚成功读过这份 manifest，这里失败只可能是文件在两次读之间消失了。
-    // 此时退回空 detect —— 插件仍然会被列出来，只是不参与检测。
+    // `list()` just read this manifest successfully, so a failure here can only mean the file
+    // disappeared between the two reads. Fall back to an empty detect then — the plugin is still
+    // listed, it just does not take part in detection.
     let manifest = kit.manifest_of(&info.crate_name).ok();
     let (strong, weak) = manifest.as_ref().map(detect_patterns).unwrap_or_default();
 
@@ -150,9 +156,9 @@ fn read_one(kit: &CratePluginKit<PmpxPluginV1>, info: &PluginInfo) -> Result<Ins
     })
 }
 
-/// 从 manifest 的不认识字段里挖出 `[detect]`。
+/// Dig `[detect]` out of the manifest's unrecognized fields.
 ///
-/// `crate-plugin-kit` 不认识它，所以它被原样留在 `extra` 里。
+/// `crate-plugin-kit` does not know it, so it is left as-is in `extra`.
 fn detect_patterns(manifest: &PluginManifest) -> (Vec<String>, Vec<String>) {
     let Some(detect) = manifest.extra.get("detect") else {
         return (Vec::new(), Vec::new());
@@ -164,8 +170,9 @@ fn detect_patterns(manifest: &PluginManifest) -> (Vec<String>, Vec<String>) {
     )
 }
 
-/// 把一个 TOML 值读成字符串数组；不是数组、或元素不是字符串时跳过而不是报错 ——
-/// 写坏的 `detect` 段不该让整个插件从清单里消失。
+/// Read a TOML value as an array of strings; when it is not an array, or an element is not a
+/// string, skip it instead of erroring — a malformed `detect` section must not make the whole
+/// plugin disappear from the manifest.
 fn str_array(value: Option<&toml::Value>) -> Vec<String> {
     value
         .and_then(|v| v.as_array())
@@ -208,7 +215,7 @@ strong = ["Cargo.lock"]
 weak   = ["Cargo.toml"]
 "#;
 
-    /// 造一个插件库，返回（保活, kit, 数据目录）。
+    /// Build a plugin store, returning (keep-alive, kit, data dir).
     fn store(
         entries: &[(&str, &str)],
     ) -> (tempfile::TempDir, CratePluginKit<PmpxPluginV1>, PathBuf) {
@@ -272,7 +279,7 @@ weak   = ["Cargo.toml"]
         let before = names.len();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), before, "有重复：{names:?}");
+        assert_eq!(names.len(), before, "duplicates: {names:?}");
 
         assert!(names.contains(&"Cargo.toml"));
         assert!(names.contains(&"pnpm-lock.yaml"));
@@ -288,11 +295,17 @@ weak   = ["Cargo.toml"]
         assert!(!set.marks_root(tmp.path()));
 
         std::fs::write(tmp.path().join("package.json"), "{}").unwrap();
-        assert!(set.marks_root(tmp.path()), "弱证据也算项目根");
+        assert!(
+            set.marks_root(tmp.path()),
+            "weak evidence also marks a root"
+        );
 
         let other = tempfile::tempdir().unwrap();
         std::fs::write(other.path().join(".pmpx.toml"), "").unwrap();
-        assert!(set.marks_root(other.path()), ".pmpx.toml 本身就是根标记");
+        assert!(
+            set.marks_root(other.path()),
+            ".pmpx.toml is itself a root marker"
+        );
     }
 
     #[test]
@@ -313,7 +326,8 @@ weak   = ["Cargo.toml"]
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Cargo.toml"), "").unwrap();
 
-        // 零插件时**不做任何猜测** —— 这条断言就是"提示表不参与裁决"的具体体现
+        // With zero plugins **nothing is guessed** — this assertion is the concrete form of "the
+        // hint table takes no part in resolution"
         assert!(!set.marks_root(tmp.path()));
     }
 
@@ -325,12 +339,15 @@ weak   = ["Cargo.toml"]
         )]);
         let set = PluginSet::load(&kit).unwrap();
 
-        assert_eq!(set.plugins.len(), 1, "仍然要列出来");
+        assert_eq!(set.plugins.len(), 1, "still listed");
         let p = &set.plugins[0];
         assert!(!p.is_usable());
         assert!(p.problem().unwrap().contains("family"));
         assert_eq!(set.usable().count(), 0);
-        assert!(set.detect_names().is_empty(), "不可用的插件不参与检测");
+        assert!(
+            set.detect_names().is_empty(),
+            "unusable plugins take no part in detection"
+        );
     }
 
     #[test]
@@ -355,9 +372,16 @@ weak   = ["Cargo.toml"]
         let set = PluginSet::load(&kit).unwrap();
 
         let p = &set.plugins[0];
-        assert!(p.strong.is_empty(), "非数组当空处理");
-        assert_eq!(p.weak, vec!["package.json"], "非字符串元素被跳过");
-        assert!(p.is_usable(), "还有一条能用的证据，插件仍可用");
+        assert!(p.strong.is_empty(), "a non-array is treated as empty");
+        assert_eq!(
+            p.weak,
+            vec!["package.json"],
+            "non-string elements are skipped"
+        );
+        assert!(
+            p.is_usable(),
+            "one usable piece of evidence is left, the plugin is still usable"
+        );
     }
 
     #[test]

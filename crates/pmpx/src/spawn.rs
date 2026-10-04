@@ -1,23 +1,24 @@
-//! 把 [`CommandSpec`] 变成真正的进程。
+//! Turn a [`CommandSpec`] into a real process.
 //!
-//! # 为什么 spawn 由 pmpx 做，而不是插件
+//! # Spawn ownership
 //!
-//! 插件只回答"跑什么"，pmpx 负责"怎么跑"，于是 stdio、环境继承、退出码处理
-//! 只有一处实现。
+//! Plugins only answer "what to run"; pmpx owns "how to run it", so stdio, environment
+//! inheritance and exit-code handling have exactly one implementation.
 //!
-//! # Windows 上必须解析真实路径
+//! # On Windows the real path must be resolved
 //!
-//! `Command::new("pnpm")` 在 Windows 上会失败：`CreateProcessW` 只做 PATH 查找加补
-//! `.exe`，不做 PATHEXT 解析。而 npm / pnpm / yarn / bun 在 Windows 上全是 `.cmd`
-//! shim（`pnpm.cmd`）。
+//! `Command::new("pnpm")` fails on Windows: `CreateProcessW` only does a PATH lookup plus
+//! appending `.exe`, it does no PATHEXT resolution. On Windows npm / pnpm / yarn / bun are
+//! all `.cmd` shims (`pnpm.cmd`).
 //!
-//! 所以先解析出真实路径，再按类型 spawn：`.cmd` / `.bat` 交给 `cmd /d /s /c`，
-//! `.ps1` 交给 `pwsh -NoProfile -File`，解析不到就报错（退出码 3）并列出 PATH 里
-//! 名字相近的候选。
+//! So the real path is resolved first, then spawned by kind: `.cmd` / `.bat` go to
+//! `cmd /d /s /c`, `.ps1` goes to `pwsh -NoProfile -File`, and a failed resolution is an
+//! error (exit code 3) that lists the near-matching names in PATH.
 
 use std::ffi::OsStr;
-// `OsString` 只在 Windows 侧用到（拼 cmd 命令行、以及那个真的跑 .cmd 的测试），
-// 非 Windows 上这个名字一次都不出现 —— 不加 cfg 就是 unused import，而 CI 是 -D warnings。
+// `OsString` is only used on the Windows side (building the cmd command line, and the test
+// that really runs a .cmd); the name never appears on non-Windows -- without the cfg it is an
+// unused import, and CI runs with -D warnings.
 #[cfg(windows)]
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -27,30 +28,32 @@ use pmpx_plugin::CommandSpec;
 
 use crate::error::{PmpxError, Result};
 
-/// 解析到的后端可执行文件的类型。
+/// The kind of backend executable that was resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProgramKind {
-    /// 真正的可执行文件。直接 spawn。
+    /// A real executable. Spawned directly.
     Native,
-    /// `.cmd` / `.bat`。需要 `cmd.exe` 当解释器。
+    /// `.cmd` / `.bat`. Needs `cmd.exe` as the interpreter.
     CmdShim,
-    /// `.ps1`。需要 PowerShell。
+    /// `.ps1`. Needs PowerShell.
     PowerShellShim,
 }
 
-/// 解析结果。
+/// A resolution result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
-    /// 真实路径。
+    /// The real path.
     pub program: PathBuf,
-    /// 它是哪一类。
+    /// Which kind it is.
     pub kind: ProgramKind,
 }
 
-/// 解析后端可执行文件的真实路径。
+/// Resolve the real path of a backend executable.
 ///
-/// - `program` 里带路径分隔符 → 直接用，不去 PATH 里搜（用户明确指了路径）。
-/// - 否则走 `which`。它在 Windows 上会做 PATHEXT 解析，这正是我们要的。
+/// - `program` containing a path separator means use it directly, without searching PATH
+///   (the user pointed at a path explicitly).
+/// - Otherwise go through `which`. On Windows it does PATHEXT resolution, which is exactly
+///   what is needed here.
 pub fn resolve(program: &OsStr) -> Result<Resolved> {
     let as_path = Path::new(program);
 
@@ -66,7 +69,7 @@ pub fn resolve(program: &OsStr) -> Result<Resolved> {
             as_path.to_path_buf()
         } else {
             return Err(PmpxError::not_found(format!(
-                "找不到 {}。它看起来是个路径，但那里没有文件。",
+                "cannot find {}. It looks like a path, but there is no file there.",
                 as_path.display()
             )));
         }
@@ -80,7 +83,7 @@ pub fn resolve(program: &OsStr) -> Result<Resolved> {
     })
 }
 
-/// 按扩展名判断该怎么 spawn。
+/// Decide how to spawn based on the extension.
 fn kind_of(path: &Path) -> ProgramKind {
     let ext = path
         .extension()
@@ -94,46 +97,49 @@ fn kind_of(path: &Path) -> ProgramKind {
     }
 }
 
-/// 找不到时给一句能指导下一步的话：列出 PATH 里名字相近的文件 ——
-/// 那比干说一句"找不到 pnpm"有用得多。
+/// When nothing is found, say something that guides the next step: list the near-matching
+/// files in PATH -- that is far more useful than a bare "pnpm not found".
 fn not_found_error(program: &OsStr) -> PmpxError {
     let wanted = program.to_string_lossy().to_ascii_lowercase();
     let near = near_misses(&wanted);
 
-    let mut msg = format!("找不到可执行文件 {}", program.to_string_lossy());
+    let mut msg = format!("cannot find executable {}", program.to_string_lossy());
 
     if near.is_empty() {
-        msg.push_str("\nPATH 里没有名字相近的东西 —— 它可能根本没装。");
+        msg.push_str(
+            "\nNothing in PATH has a similar name -- it is probably not installed at all.",
+        );
     } else {
-        msg.push_str("\nPATH 里名字相近的有：");
+        msg.push_str("\nSimilar names in PATH:");
         for p in &near {
-            msg.push_str(&format!("\n  · {}", p.display()));
+            msg.push_str(&format!("\n  - {}", p.display()));
         }
     }
 
-    // Windows 上最常见的那一种，单独点出来
+    // The most common Windows case gets its own note
     #[cfg(windows)]
     if matches!(near.first().and_then(|p| p.extension()), Some(e) if e.eq_ignore_ascii_case("cmd"))
     {
         msg.push_str(
-            "\n\n提示：Windows 上这些包管理器是 .cmd 脚本，需要靠 PATHEXT 才能解析到；\
-             pmpx 已经做了这件事，所以看到这条说明那个目录确实不在 PATH 里。",
+            "\n\nNote: on Windows these package managers are .cmd scripts and only PATHEXT \
+             resolution finds them; pmpx already does that, so seeing this means that \
+             directory really is not on PATH.",
         );
     }
 
     PmpxError::not_found(msg)
 }
 
-/// 一个 PATH 里的文件名算不算 `wanted` 的"相近候选"。
+/// Whether a file name in PATH counts as a "near candidate" for `wanted`.
 ///
-/// 用前缀匹配而不是编辑距离：编辑距离会把 `pnpm` 与 `npm` 也算成相近，而那是
-/// 两个毫无关系的工具。
+/// Prefix matching rather than edit distance: edit distance would also call `pnpm` and `npm`
+/// similar, and those are two unrelated tools.
 fn name_matches(wanted_lower: &str, candidate: &str) -> bool {
     let lower = candidate.to_ascii_lowercase();
     lower.starts_with(wanted_lower) && lower != wanted_lower
 }
 
-/// 在 PATH 里找名字相近的文件。
+/// Find near-matching files in PATH.
 fn near_misses(wanted_lower: &str) -> Vec<PathBuf> {
     let Ok(path_var) = std::env::var("PATH") else {
         return Vec::new();
@@ -159,9 +165,10 @@ fn near_misses(wanted_lower: &str) -> Vec<PathBuf> {
     out
 }
 
-/// 按 [`Resolved`] 的类型构造一个 [`Command`]，但不跑它。
+/// Build a [`Command`] for a [`Resolved`] kind, without running it.
 ///
-/// 拆出这一步是为了可测：测试要用 `output()` 抓输出，而 [`run`] 是继承 stdio 的。
+/// This step is split out for testability: tests need `output()` to capture output, while
+/// [`run`] inherits stdio.
 pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
     let resolved = resolve(&spec.program)?;
 
@@ -175,12 +182,18 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
         ProgramKind::CmdShim => {
             #[cfg(windows)]
             {
-                // ⚠️ 必须自己拼整条命令行，而且必须用 `raw_arg`。
+                // The whole command line has to be built here, and it must go through
+                // `raw_arg`.
                 //
-                // 不能逐个 arg 传：`cmd /c` 有自己的引号规则，会按条件剥掉整串的首尾引号，
-                // 所以要 `cmd /d /s /c "<path> <args>"` —— 外面那层留给 `/s` 剥。
-                // 也不能用 `arg` 传拼好的串：它会再套一层引号、把我们写好的 `"` 转义成
-                // `\"`，cmd 就认不出来了。这一段要的是逐字送达，`raw_arg` 就是为这个存在的。
+                // Passing the arguments one by one does not work: `cmd /c` has its own
+                // quoting rules and strips the leading and trailing quotes of the whole
+                // string under some conditions, so it has to be
+                // `cmd /d /s /c "<path> <args>"` -- the outer pair is left there for `/s`
+                // to strip.
+                // Passing the built string through `arg` does not work either: it adds
+                // another layer of quotes and escapes our `"` into `\"`, which cmd no longer
+                // recognises. This needs verbatim delivery, which is what `raw_arg` exists
+                // for.
                 use std::os::windows::process::CommandExt;
 
                 let mut c = Command::new("cmd");
@@ -190,10 +203,11 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
 
             #[cfg(not(windows))]
             {
-                // `.cmd` / `.bat` 是 Windows 专有形态，这里没有 cmd.exe 可用。
-                // 但 `kind_of` 仍然会把它们分类成 CmdShim（分类是跨平台的），所以这个
-                // 分支得存在。真走到就按普通程序启动 —— 它会以 Exec format error 之类的
-                // 系统错误失败，那是实话。
+                // `.cmd` / `.bat` are Windows-only forms and there is no cmd.exe here.
+                // But `kind_of` still classifies them as CmdShim (the classification is
+                // cross-platform), so this branch has to exist. If it is really reached, the
+                // program is started as an ordinary program -- it will fail with a system
+                // error such as Exec format error, and that is the truth.
                 let mut c = Command::new(&resolved.program);
                 c.args(&spec.args);
                 c
@@ -201,9 +215,10 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
         }
 
         ProgramKind::PowerShellShim => {
-            // `-NoProfile` 是刻意的：用户的 PowerShell profile 不该影响包管理器的行为，
-            // 而且它可能很慢。`-ExecutionPolicy Bypass` 不加 —— 改安全策略不是 pmpx
-            // 该做的事，被策略挡住时让 PowerShell 自己报出真正的原因。
+            // `-NoProfile` is deliberate: the user's PowerShell profile should not affect how
+            // the package manager behaves, and it can be slow. `-ExecutionPolicy Bypass` is
+            // not added -- changing security policy is not pmpx's job, and when a policy
+            // blocks it PowerShell should report the real reason itself.
             let mut c = Command::new("pwsh");
             c.arg("-NoProfile").arg("-File").arg(&resolved.program);
             c.args(&spec.args);
@@ -212,7 +227,8 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
     };
 
     cmd.current_dir(cwd);
-    // 原样继承环境 —— pmpx 不参与代理 / 镜像 / 换源的任何一环，那些在 shell 里配。
+    // The environment is inherited verbatim -- pmpx takes no part in proxies / mirrors /
+    // registry switching; those are configured in the shell.
     cmd.stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -220,16 +236,18 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
     Ok(cmd)
 }
 
-/// 拼出交给 `cmd.exe` 的完整原始命令行（含 `/d /s /c` 与给 `/s` 剥的那层引号）。
+/// Build the complete raw command line handed to `cmd.exe` (including `/d /s /c` and the
+/// quote pair for `/s` to strip).
 ///
-/// 单独抽出来是为了可测：走 `raw_arg` 之后 `Command::get_args()` 是空的，没法内省，
-/// 而这条命令行的形状正是最容易写错的地方。
+/// It is split out for testability: after going through `raw_arg`, `Command::get_args()` is
+/// empty and cannot be introspected, and the shape of this command line is exactly where
+/// mistakes happen.
 #[cfg(windows)]
 fn cmd_raw_command_line(program: &Path, args: &[OsString]) -> String {
     format!("/d /s /c \"{}\"", build_cmd_line(program, args))
 }
 
-/// 拼一条给 `cmd /d /s /c` 用的命令行。
+/// Build one command line for `cmd /d /s /c`.
 #[cfg(windows)]
 fn build_cmd_line(program: &Path, args: &[OsString]) -> String {
     let mut line = quote_arg(&program.to_string_lossy());
@@ -240,13 +258,15 @@ fn build_cmd_line(program: &Path, args: &[OsString]) -> String {
     line
 }
 
-/// 按 Windows 命令行（`CommandLineToArgvW`）的规则给一个参数加引号。
+/// Quote one argument by the Windows command-line (`CommandLineToArgvW`) rules.
 ///
-/// 两条规则都很反直觉：`"` 在引号里要写成 `\"`；而**反斜杠只有在引号前面才有特殊
-/// 含义** —— 引号前 n 个反斜杠要写 `2n+1` 个，结尾的 n 个反斜杠要翻倍成 `2n`
-/// （否则会把收尾引号吃掉）。
+/// Both rules are counter-intuitive: `"` inside quotes has to be written `\"`; and
+/// **backslashes are only special in front of a quote** -- the n backslashes before a quote
+/// must be written as `2n+1`, and the n trailing backslashes must be doubled to `2n`
+/// (otherwise they would swallow the closing quote).
 ///
-/// 只在 Windows 上真正被调用；测试构建里也让它在，好让这套引号规则在三个平台都跑一遍。
+/// It is really only called on Windows; the test build keeps it too so the quoting rules run
+/// on all three platforms.
 #[cfg(any(windows, test))]
 fn quote_arg(arg: &str) -> String {
     if !arg.is_empty() && !arg.contains([' ', '\t', '\n', '\x0b', '"']) {
@@ -264,7 +284,8 @@ fn quote_arg(arg: &str) -> String {
                 out.push('\\');
             }
             '"' => {
-                // 引号前的反斜杠要翻倍，再加一个用来转义引号本身
+                // The backslashes before the quote are doubled, plus one to escape the quote
+                // itself
                 for _ in 0..=backslashes {
                     out.push('\\');
                 }
@@ -278,7 +299,7 @@ fn quote_arg(arg: &str) -> String {
         }
     }
 
-    // 收尾引号前的反斜杠同样要翻倍
+    // The backslashes before the closing quote are doubled as well
     for _ in 0..backslashes {
         out.push('\\');
     }
@@ -286,45 +307,50 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-/// 真的跑起来：继承 stdio、等它结束、把它的退出码原样返回。
+/// Really run it: inherit stdio, wait for it to finish, return its exit code verbatim.
 ///
-/// 返回值不是 `Result<()>`：因为"测试失败"和"pmpx 出错"是两回事，`pmpx test` 必须
-/// 能把后端的非零退出码透传给调用方的脚本 —— 那是这条命令唯一有意义的契约。
+/// The return value is not `Result<()>`: "the tests failed" and "pmpx failed" are two
+/// different things, and `pmpx test` must be able to pass the backend's nonzero exit code
+/// through to the caller's script -- that is the only meaningful contract of this command.
 pub fn run(spec: &CommandSpec, cwd: &Path) -> Result<u8> {
     let mut cmd = command_for(spec, cwd)?;
 
     let status = cmd.status().map_err(|e| {
-        PmpxError::Other(
-            anyhow::anyhow!(e).context(format!("启动 {} 失败", spec.program.to_string_lossy())),
-        )
+        PmpxError::Other(anyhow::anyhow!(e).context(format!(
+            "failed to start {}",
+            spec.program.to_string_lossy()
+        )))
     })?;
 
     Ok(exit_code_of(status))
 }
 
-/// 把 `ExitStatus` 翻译成进程退出码。
+/// Translate an `ExitStatus` into a process exit code.
 fn exit_code_of(status: std::process::ExitStatus) -> u8 {
     if let Some(code) = status.code() {
         if (0..=255).contains(&code) {
             return code as u8;
         }
-        // Windows 上退出码可以是任意 u32，而 Unix 只认低 8 位。取低 8 位而不是报错 ——
-        // 用户的脚本关心的是"非零"，不是精确值。
-        eprintln!("pmpx: 后端退出码 {code} 超出 0-255，按低 8 位透传");
+        // On Windows an exit code can be any u32, while Unix only keeps the low 8 bits. Take
+        // the low 8 bits instead of erroring -- the user's script cares about "nonzero", not
+        // the exact value.
+        eprintln!(
+            "pmpx: backend exit code {code} is outside 0-255, passing through the low 8 bits"
+        );
         return (code & 0xFF) as u8;
     }
 
-    // 被信号杀掉（Unix）。沿用 shell 的惯例：128 + signal。
+    // Killed by a signal (Unix). Follow the shell convention: 128 + signal.
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(sig) = status.signal() {
-            eprintln!("pmpx: 后端被信号 {sig} 终止");
+            eprintln!("pmpx: the backend was killed by signal {sig}");
             return (128 + sig).clamp(0, 255) as u8;
         }
     }
 
-    eprintln!("pmpx: 拿不到后端的退出码，按 1 处理");
+    eprintln!("pmpx: cannot read the backend exit code, treating it as 1");
     1
 }
 
@@ -332,7 +358,7 @@ fn exit_code_of(status: std::process::ExitStatus) -> u8 {
 mod tests {
     use super::*;
 
-    // ---- 类型判定 ----------------------------------------------------------
+    // ---- kind classification -------------------------------------------------
 
     #[test]
     fn exe_and_extensionless_are_native() {
@@ -347,7 +373,8 @@ mod tests {
         assert_eq!(kind_of(Path::new("C:/x/old.bat")), ProgramKind::CmdShim);
     }
 
-    /// 扩展名大小写不敏感 —— Windows 上 `.CMD` 和 `.cmd` 是同一个东西。
+    /// Extension matching is case-insensitive -- `.CMD` and `.cmd` are the same thing on
+    /// Windows.
     #[test]
     fn extension_matching_is_case_insensitive() {
         assert_eq!(kind_of(Path::new("C:/x/PNPM.CMD")), ProgramKind::CmdShim);
@@ -365,7 +392,7 @@ mod tests {
         );
     }
 
-    // ---- 引号规则 ----------------------------------------------------------
+    // ---- quoting rules -------------------------------------------------------
 
     #[test]
     fn simple_args_are_not_quoted() {
@@ -381,7 +408,7 @@ mod tests {
 
     #[test]
     fn empty_arg_becomes_empty_quotes() {
-        // 不这样写的话空参数会在命令行上直接消失
+        // Without this an empty argument would simply vanish from the command line
         assert_eq!(quote_arg(""), "\"\"");
     }
 
@@ -390,15 +417,16 @@ mod tests {
         assert_eq!(quote_arg("say \"hi\""), "\"say \\\"hi\\\"\"");
     }
 
-    /// 反斜杠只有在引号前才特殊 —— 所以没有空格就不用加引号，
-    /// 也就不存在结尾反斜杠的问题。
+    /// Backslashes are only special before a quote -- so no spaces means no quotes are added,
+    /// and there is no trailing-backslash problem either.
     #[test]
     fn an_arg_without_spaces_is_left_alone_even_with_backslashes() {
         assert_eq!(quote_arg("C:\\dir\\"), "C:\\dir\\");
         assert_eq!(quote_arg("C:\\x\\y"), "C:\\x\\y");
     }
 
-    /// 但一旦要加引号，结尾的反斜杠必须翻倍，否则会把收尾引号转义掉。
+    /// But once quotes are needed, the trailing backslashes must be doubled, otherwise they
+    /// would escape the closing quote.
     #[test]
     fn trailing_backslashes_are_doubled_when_quoting() {
         assert_eq!(quote_arg("a b\\"), "\"a b\\\\\"");
@@ -407,7 +435,7 @@ mod tests {
 
     #[test]
     fn backslashes_before_a_quote_are_doubled_and_the_quote_escaped() {
-        // `a\"` → 一个反斜杠 + 引号 → `a\\\"`
+        // `a\"` -> one backslash + a quote -> `a\\\"`
         assert_eq!(quote_arg("a\\\"b"), "\"a\\\\\\\"b\"");
     }
 
@@ -416,24 +444,25 @@ mod tests {
         assert_eq!(quote_arg("C:\\a b\\c"), "\"C:\\a b\\c\"");
     }
 
-    // ---- 相近候选的判定 ----------------------------------------------------
+    // ---- near-miss classification --------------------------------------------
 
     #[test]
     fn a_cmd_shim_is_a_near_miss_for_its_bare_name() {
         assert!(name_matches("pnpm", "pnpm.cmd"));
-        assert!(name_matches("pnpm", "PNPM.CMD"), "大小写不敏感");
+        assert!(name_matches("pnpm", "PNPM.CMD"), "case-insensitive");
         assert!(name_matches("pnpm", "pnpm.cmd.old"));
     }
 
-    /// 只差一个字母的两个名字不是相近候选 —— 这正是用前缀匹配而不是编辑距离的理由。
+    /// Two names differing by one letter are not near candidates -- this is the reason for
+    /// prefix matching instead of edit distance.
     #[test]
     fn a_different_tool_is_not_a_near_miss() {
         assert!(!name_matches("npm", "pnpm.cmd"));
         assert!(!name_matches("pnpm", "npmy"));
     }
 
-    /// 前缀匹配的已知代价：`bun` 会把 `bunzip2`、`npm` 会把 `npmx` 也捞进来。
-    /// 认账但不修 —— 换成编辑距离只会更糟。
+    /// The known cost of prefix matching: `bun` also drags in `bunzip2`, `npm` also drags in
+    /// `npmx`. Accepted rather than fixed -- edit distance would only be worse.
     #[test]
     fn prefix_matching_accepts_some_false_positives() {
         assert!(name_matches("bun", "bunzip2"));
@@ -442,14 +471,15 @@ mod tests {
 
     #[test]
     fn an_exact_name_is_not_a_near_miss() {
-        // 精确命中说明它本来就会被找到，不该出现在"相近候选"里
+        // An exact match means it would have been found anyway, so it does not belong in
+        // "near candidates"
         assert!(!name_matches("cargo", "cargo"));
         assert!(!name_matches("cargo", "CARGO"));
     }
 
-    // ---- 解析 --------------------------------------------------------------
+    // ---- resolution ----------------------------------------------------------
 
-    /// 带路径分隔符时直接用，不去 PATH 里搜。
+    /// With a path separator it is used directly, without searching PATH.
     #[test]
     fn an_explicit_path_is_used_as_is() {
         let tmp = tempfile::tempdir().unwrap();
@@ -467,13 +497,13 @@ mod tests {
 
         let err = resolve(p.as_os_str()).unwrap_err();
         assert_eq!(err.exit_code(), crate::error::EXIT_NOT_FOUND);
-        assert!(err.to_string().contains("路径"));
+        assert!(err.to_string().contains("path"));
     }
 
-    /// 当前一定能解析到 `cargo` —— 我们正跑在 `cargo test` 里。
+    /// `cargo` is guaranteed to resolve right now -- we are running inside `cargo test`.
     #[test]
     fn resolves_a_real_program_from_path() {
-        let r = resolve(OsStr::new("cargo")).expect("cargo 必须在 PATH 上");
+        let r = resolve(OsStr::new("cargo")).expect("cargo must be on PATH");
         assert!(r.program.is_absolute(), "{:?}", r.program);
     }
 
@@ -483,10 +513,12 @@ mod tests {
         assert_eq!(err.exit_code(), crate::error::EXIT_NOT_FOUND);
     }
 
-    /// `which` 在 Windows 上做 PATHEXT 解析，`pnpm` 才能解析到 `pnpm.cmd`。
+    /// `which` does PATHEXT resolution on Windows, which is how `pnpm` resolves to
+    /// `pnpm.cmd`.
     ///
-    /// 这个测试直接问 `which`（用 `which_in` 指定搜索目录），而不是走 [`resolve`]：
-    /// `resolve` 读的是进程级 PATH，而并发跑的测试里改那个变量是不安全的。
+    /// This test asks `which` directly (using `which_in` with an explicit search directory)
+    /// rather than going through [`resolve`]: `resolve` reads the process-level PATH, and
+    /// mutating that variable in concurrently running tests is unsafe.
     #[cfg(windows)]
     #[test]
     fn which_does_pathex_resolution() {
@@ -495,7 +527,7 @@ mod tests {
         std::fs::write(&shim, "@echo off\r\n").unwrap();
 
         let found = which::which_in("pmpxprobe", Some(tmp.path()), tmp.path())
-            .expect("which 应当能靠 PATHEXT 找到 .cmd");
+            .expect("which should find the .cmd via PATHEXT");
 
         assert_eq!(
             found
@@ -508,7 +540,7 @@ mod tests {
         assert_eq!(kind_of(&found), ProgramKind::CmdShim);
     }
 
-    /// 找不到时那条消息必须有信息量。
+    /// The message for "not found" has to carry information.
     #[test]
     fn a_missing_program_says_something_useful() {
         let err = resolve(OsStr::new("pmpx-definitely-not-a-real-program-xyz")).unwrap_err();
@@ -519,12 +551,12 @@ mod tests {
             "{msg}"
         );
         assert!(
-            msg.contains("根本没装") || msg.contains("名字相近"),
-            "要么说清可能没装，要么列出候选：{msg}"
+            msg.contains("not installed") || msg.contains("Similar names"),
+            "either say it is probably not installed, or list candidates: {msg}"
         );
     }
 
-    // ---- 真的跑一条命令 ----------------------------------------------------
+    // ---- really running a command --------------------------------------------
 
     #[test]
     fn runs_a_native_command_and_returns_its_exit_code() {
@@ -533,7 +565,7 @@ mod tests {
         assert_eq!(
             run(&spec, tmp.path()).unwrap(),
             0,
-            "cargo --version 应当成功"
+            "cargo --version should succeed"
         );
     }
 
@@ -546,10 +578,15 @@ mod tests {
         #[cfg(not(windows))]
         let spec = CommandSpec::new("sh").arg("-c").arg("exit 7");
 
-        assert_eq!(run(&spec, tmp.path()).unwrap(), 7, "必须原样透传");
+        assert_eq!(
+            run(&spec, tmp.path()).unwrap(),
+            7,
+            "must pass through verbatim"
+        );
     }
 
-    /// 工作目录要真的生效 —— 插件报的 `cwd` 与项目根都靠它。
+    /// The working directory has to take effect -- both the `cwd` a plugin reports and the
+    /// project root rely on it.
     #[test]
     fn the_working_directory_is_honoured() {
         let tmp = tempfile::tempdir().unwrap();
@@ -560,11 +597,12 @@ mod tests {
         let mut cmd = command_for(&spec, tmp.path()).unwrap();
         let out = cmd.output().unwrap();
 
-        // cargo 只会在有 Cargo.toml 的地方做别的事，这里只要证明"能跑起来"就够了
+        // cargo only does anything else where there is a Cargo.toml; here it is enough to
+        // prove it starts
         assert!(out.status.success());
     }
 
-    // ---- command_for 的构造 ------------------------------------------------
+    // ---- command_for construction --------------------------------------------
 
     #[test]
     fn a_missing_program_fails_before_spawning() {
@@ -574,7 +612,8 @@ mod tests {
         assert!(command_for(&spec, tmp.path()).is_err());
     }
 
-    /// Windows 上 `.cmd` 必须被 `cmd /d /s /c` 包起来，且首尾各有一层给 `/s` 剥的引号。
+    /// On Windows `.cmd` must be wrapped in `cmd /d /s /c`, with one quote pair at each end
+    /// for `/s` to strip.
     #[cfg(windows)]
     #[test]
     fn a_cmd_shim_is_wrapped_in_cmd_exe() {
@@ -584,14 +623,19 @@ mod tests {
         let line = cmd_raw_command_line(shim, &args);
 
         assert!(line.starts_with("/d /s /c "), "{line}");
-        // 最外层那对引号是给 `/s` 剥的
+        // The outermost quote pair is there for `/s` to strip
         assert!(line.ends_with('"'), "{line}");
-        assert_eq!(line.matches('"').count(), 4, "路径一对 + 外层一对：{line}");
+        assert_eq!(
+            line.matches('"').count(),
+            4,
+            "one pair for the path + one outer pair: {line}"
+        );
         assert!(line.contains("\"C:\\path with space\\pnpm.cmd\""), "{line}");
         assert!(line.ends_with("add serde\""), "{line}");
     }
 
-    /// 路径没有空格时不必加引号，但外层那对必须在 —— `/s` 的行为依赖于它。
+    /// A path without spaces needs no quotes, but the outer pair must still be there --
+    /// `/s`'s behaviour depends on it.
     #[cfg(windows)]
     #[test]
     fn the_outer_quote_pair_is_always_present() {
@@ -599,9 +643,10 @@ mod tests {
         assert_eq!(line, "/d /s /c \"C:\\x\\pnpm.cmd\"");
     }
 
-    /// 真的跑一个 `.cmd`，并确认参数传进去了。
+    /// Really run a `.cmd` and confirm the arguments arrive.
     ///
-    /// `cmd` 的引号规则是一套独立实现，只能真跑一遍来确认。
+    /// cmd's quoting rules are a separate implementation, so the only way to confirm is to
+    /// run it for real.
     #[cfg(windows)]
     #[test]
     fn a_cmd_shim_really_runs_and_receives_its_args() {
@@ -621,7 +666,8 @@ mod tests {
         assert_eq!(got.trim(), "add serde");
     }
 
-    /// 路径里带空格时 `.cmd` 也要能跑 —— `/s` 加双层引号就是为这个。
+    /// A `.cmd` has to run from a path with spaces too -- that is what the double quoting
+    /// and `/s` are for.
     #[cfg(windows)]
     #[test]
     fn a_cmd_shim_in_a_path_with_spaces_still_runs() {
@@ -636,14 +682,14 @@ mod tests {
         assert_eq!(
             run(&spec, tmp.path()).unwrap(),
             0,
-            "带空格的路径必须能跑通 —— 这是双层引号存在的理由"
+            "a path with spaces must work -- that is why the double quoting exists"
         );
     }
 
-    /// 带空格的参数也要能原样到达。
+    /// An argument with spaces has to arrive verbatim too.
     ///
-    /// 用 `%~1` 而不是 `%1`：`%1` 会把引号一起带进来（cmd 的既有行为），
-    /// `%~1` 才是"去掉包裹引号的值"。
+    /// `%~1` rather than `%1`: `%1` brings the quotes along (existing cmd behaviour), while
+    /// `%~1` is "the value with the wrapping quotes removed".
     #[cfg(windows)]
     #[test]
     fn a_cmd_shim_receives_an_argument_with_spaces() {

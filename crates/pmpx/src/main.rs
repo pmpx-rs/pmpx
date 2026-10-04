@@ -1,19 +1,19 @@
-//! pmpx —— 一个命令面，识别项目类型，转发给真正的工具。
+//! pmpx -- one command surface that detects the project type and forwards to the real tool.
 //!
-//! 这个二进制里没有一行插件代码：支持 cargo / pnpm 的能力都在各自的插件仓库里，
-//! 运行时 `dlopen` 进来。
+//! This binary contains no plugin code: support for cargo / pnpm lives in the plugin crates
+//! themselves and is `dlopen`ed at runtime.
 //!
-//! # 分层
+//! # Layers
 //! ```text
-//! main.rs / cli.rs                    进程边界与参数解析
-//! commands.rs / app.rs                子命令处理与流程编排
-//! config.rs / discovery.rs            配置读取与项目根发现
-//! plugins.rs / detect.rs / hints.rs   插件清单、裁决、零插件时的提示
-//! runtime.rs / spawn.rs               加载选中的插件、启动进程
+//! main.rs / cli.rs                    process boundary and argument parsing
+//! commands.rs / app.rs                subcommand handling and flow orchestration
+//! config.rs / discovery.rs            config reading and project root discovery
+//! plugins.rs / detect.rs / hints.rs   plugin manifests, resolution, hints with zero plugins
+//! runtime.rs / spawn.rs               load the selected plugin, start the process
 //! ```
 //!
-//! 一条硬规矩：检测阶段绝不加载任何插件代码（`plugins.rs` 只读 manifest）—— 在一个
-//! 从没装过插件的仓库里跑 `pmpx`，它不会执行任何第三方代码。
+//! One hard rule: detection never loads any plugin code (`plugins.rs` only reads manifests)
+//! -- running `pmpx` in a repo that never installed a plugin executes no third-party code.
 
 #![deny(missing_docs)]
 #![warn(clippy::all)]
@@ -38,12 +38,12 @@ fn main() -> std::process::ExitCode {
     std::process::ExitCode::from(code)
 }
 
-/// 跑一次，返回进程退出码 —— 可能来自后端。
+/// Run once and return the process exit code -- which may come from the backend.
 fn dispatch(args: &cli::Cli) -> u8 {
     match commands::dispatch(args) {
         Ok(code) => code,
         Err(e) => {
-            // 统一前缀，让用户在后端输出里一眼分辨出哪些话是 pmpx 说的。
+            // One shared prefix so the user can spot pmpx's own words inside backend output.
             eprintln!("pmpx: {e}");
             e.exit_code()
         }

@@ -1,19 +1,22 @@
-//! 把编译期的 rustc 版本与 target triple 注入进去，供 `pmpx_plugin::abi` 填进
-//! `PmpxPluginV1`。
+//! Inject the compile-time rustc version and target triple for `pmpx_plugin::abi` to fill into
+//! `PmpxPluginV1`.
 //!
-//! `rustc --version` 是**运行期**问不到的东西，所以编译期问一次、把答案固化进二进制。
-//! 这些常量会被链接进每一个插件，插件因此不需要自己的 build.rs。
+//! `rustc --version` is not something that can be asked at runtime, so ask once at compile time
+//! and pin the answer into the binary. These constants get linked into every plugin, so a plugin
+//! does not need a build.rs of its own.
 
 use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    // 换工具链要重新跑，否则会把上一个工具链的版本号固化进去。
+    // Switching toolchains has to re-run this, otherwise the previous toolchain's version number
+    // gets pinned.
     println!("cargo:rerun-if-env-changed=RUSTC");
 
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
 
-    // 问不到就写 "unknown" —— 这个字段只用于诊断展示，拿不到不该让构建失败。
+    // Write "unknown" when it cannot be asked -- this field is only for diagnostics, and failing
+    // to get it should not break the build.
     let version = Command::new(&rustc)
         .arg("--version")
         .output()

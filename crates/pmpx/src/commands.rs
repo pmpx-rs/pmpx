@@ -1,6 +1,7 @@
-//! 子命令的处理。
+//! Subcommand handling.
 //!
-//! 这一层只做"读上下文 → 做事 → 打印"，判断逻辑在 [`crate::app`] 与它下面。
+//! This layer only does "read the context -> do the work -> print"; the decision logic lives
+//! in [`crate::app`] and below.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ use crate::config::ProjectConfig;
 use crate::detect::{self, FamilyScore, ScoredPlugin};
 use crate::error::{PmpxError, EXIT_OK};
 
-/// 按 argv 分发。
+/// Dispatch by argv.
 pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
     let Some(command) = &args.command else {
         return show_detection(args);
@@ -39,13 +40,14 @@ pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
         }
 
         Command::Run { target, args: rest } => {
-            // `pmpx run <target> -- <args>`：target 与 `--` 之后的内容一起交给插件，
-            // 怎么摆由插件自己决定（例如 cargo 会用 `cargo run -- …`）。
+            // `pmpx run <target> -- <args>`: the target and what follows `--` go to the
+            // plugin together; how to arrange them is up to the plugin (cargo, for example,
+            // uses `cargo run -- ...`).
             let argv: Vec<OsString> = target.iter().cloned().chain(rest.iter().cloned()).collect();
             run_verb(args, pmpx_plugin::Verb::Run, argv, false)
         }
 
-        // `exec` 是唯一允许降级的动词
+        // `exec` is the only verb allowed to degrade
         Command::Exec { command } => run_verb(args, pmpx_plugin::Verb::Exec, command.clone(), true),
 
         Command::Info => info(args),
@@ -56,7 +58,7 @@ pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
     }
 }
 
-/// 统一的动词入口：开 session，交给 [`app::run_verb`]。
+/// The shared verb entry point: open a session and hand over to [`app::run_verb`].
 fn run_verb(
     args: &Cli,
     verb: pmpx_plugin::Verb,
@@ -68,10 +70,10 @@ fn run_verb(
 }
 
 // ---------------------------------------------------------------------------
-// 不带子命令：显示检测结果
+// No subcommand: show the detection result
 // ---------------------------------------------------------------------------
 
-/// 裸 `pmpx`：说清"这个目录是什么、会走哪个后端"。
+/// Bare `pmpx`: state what this directory is and which backend will run.
 fn show_detection(args: &Cli) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
@@ -83,11 +85,14 @@ fn show_detection(args: &Cli) -> crate::error::Result<u8> {
 
     session.emit_notes(&selection);
 
-    println!("项目根   {}", root.display());
-    println!("生态     {}", selection.family.display());
-    println!("插件     {}（{} 分）", selection.name, selection.score);
+    println!("{:<12}  {}", "Project root", root.display());
+    println!("{:<12}  {}", "Family", selection.family.display());
+    println!(
+        "{:<12}  {} (score {})",
+        "Plugin", selection.name, selection.score
+    );
     println!();
-    println!("用 `pmpx info` 看全部候选与得分。");
+    println!("Use `pmpx info` to see every candidate and score.");
 
     Ok(EXIT_OK)
 }
@@ -96,20 +101,22 @@ fn show_detection(args: &Cli) -> crate::error::Result<u8> {
 // info
 // ---------------------------------------------------------------------------
 
-/// `pmpx info`：把检测过程整个摊开。
+/// `pmpx info`: lay out the whole detection process.
 ///
-/// 像 `plugin current` 一样始终列出全部候选及得分 —— 那是让歧义可见的手段。
+/// Like `plugin current`, it always lists every candidate and score -- that is what makes
+/// ambiguity visible.
 fn info(args: &Cli) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
-    println!("起点       {}", session.start_dir.display());
+    println!("{:<12}  {}", "Start", session.start_dir.display());
     match session.project_root() {
-        Some(root) => println!("项目根     {}", root.display()),
-        None => println!("项目根     （没找到）"),
+        Some(root) => println!("{:<12}  {}", "Project root", root.display()),
+        None => println!("{:<12}  (not found)", "Project root"),
     }
     println!(
-        "上溯       {} 个目录后停止：{}",
-        session.walk.dirs.len(),
+        "{:<12}  {}, stopped because: {}",
+        "Walk-up",
+        crate::discovery::dirs(session.walk.dirs.len()),
         session
             .walk
             .stopped
@@ -117,27 +124,27 @@ fn info(args: &Cli) -> crate::error::Result<u8> {
     );
 
     if session.project.sources.is_empty() {
-        println!("项目配置   （无）");
+        println!("{:<12}  (none)", "Project config");
     } else {
-        println!("项目配置   （从近到远，近者优先）");
+        println!("{:<12}  (nearest first, nearest wins)", "Project config");
         for p in &session.project.sources {
-            println!("           {}", p.display());
+            println!("              {}", p.display());
         }
     }
     for (family, plugin) in &session.project.plugin {
-        println!("  固化     {family} = \"{plugin}\"");
+        println!("  {:<10}  {family} = \"{plugin}\"", "pinned");
     }
 
     println!();
 
     if session.plugins.plugins.is_empty() {
-        println!("已装插件   （无）");
+        println!("{:<12}  (none)", "Installed plugins");
         println!();
         println!("{}", session.no_project_error());
         return Ok(EXIT_OK);
     }
 
-    println!("已装插件");
+    println!("Installed plugins");
     for p in &session.plugins.plugins {
         match p.problem() {
             None => println!(
@@ -152,18 +159,21 @@ fn info(args: &Cli) -> crate::error::Result<u8> {
     println!();
 
     let Some(root) = session.project_root().map(PathBuf::from) else {
-        println!("（没有项目根，无法打分）");
+        println!("(no project root, cannot score)");
         return Ok(EXIT_OK);
     };
 
     let families = detect::score_all(&session.plugins, &root, &session.project);
 
     if families.is_empty() {
-        println!("候选       （没有可参与裁决的插件）");
+        println!(
+            "{:<12}  (no plugin can take part in the resolution)",
+            "Candidates"
+        );
         return Ok(EXIT_OK);
     }
 
-    println!("候选与得分");
+    println!("Candidates and scores");
     let mut rows: Vec<&FamilyScore> = families.values().collect();
     rows.sort_by(|a, b| {
         b.score
@@ -173,50 +183,58 @@ fn info(args: &Cli) -> crate::error::Result<u8> {
 
     for fs in rows {
         let pin = if fs.pinned {
-            "  [.pmpx.toml 已固化]"
+            "  [pinned in .pmpx.toml]"
         } else {
             ""
         };
-        println!("  {}  {} 分{pin}", fs.family.display(), fs.score);
+        println!("  {}  score {}{pin}", fs.family.display(), fs.score);
 
         for p in &fs.plugins {
             let hits = p.all_hits().collect::<Vec<_>>().join(", ");
             let detail = if hits.is_empty() {
-                "（未命中）".to_string()
+                "(no match)".to_string()
             } else {
                 hits
             };
-            println!("    {:<8} {:>4} 分   {detail}", p.name, p.score);
+            println!("    {:<8} score {:>4}   {detail}", p.name, p.score);
         }
     }
     println!();
 
-    // 裁决结果
+    // The resolution result
     match session.select(&root) {
         Ok(selection) => {
             session.emit_notes(&selection);
-            println!("选中       {}（{}）", selection.name, selection.crate_name);
+            println!(
+                "{:<12}  {} ({})",
+                "Selected", selection.name, selection.crate_name
+            );
 
             match session.load_backend(&selection) {
                 Ok(backend) => {
                     let d = backend.diagnostics();
-                    println!("  自报名   {}", d.name);
-                    println!("  自报生态 {}", d.family);
-                    println!("  编译于   {}", d.rustc_version);
-                    println!("  target   {}", d.target);
+                    println!("  {:<15} {}", "reported name", d.name);
+                    println!("  {:<15} {}", "reported family", d.family);
+                    println!("  {:<15} {}", "compiled with", d.rustc_version);
+                    println!("  {:<15} {}", "target", d.target);
 
                     if d.family != selection.family.as_str() {
                         println!(
-                            "  ⚠ manifest 说它是 {}, 它自己说是 {} —— manifest 被人改过？",
+                            "  ⚠ the manifest says it is {}, it says it is {} -- was the \
+                             manifest edited?",
                             selection.family.as_str(),
                             d.family
                         );
                     }
                 }
-                Err(e) => println!("  ⚠ 加载失败：{e}"),
+                Err(e) => println!("  ⚠ failed to load: {e}"),
             }
         }
-        Err(failure) => println!("选中       （选不出来）\n{}", failure.message()),
+        Err(failure) => println!(
+            "{:<12}  (nothing selected)\n{}",
+            "Selected",
+            failure.message()
+        ),
     }
 
     Ok(EXIT_OK)
@@ -240,14 +258,14 @@ fn plugin_cmd(args: &Cli, cmd: &PluginCommand) -> crate::error::Result<u8> {
     }
 }
 
-/// `plugin ls`：按生态分组列出。
+/// `plugin ls`: list grouped by family.
 fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
     if session.plugins.plugins.is_empty() {
-        println!("一个插件都没装。");
+        println!("No plugins are installed.");
         println!();
-        println!("用 `pmpx plugin add <name>` 装，例如 `pmpx plugin add cargo`。");
+        println!("Install one with `pmpx plugin add <name>`, for example `pmpx plugin add cargo`.");
         return Ok(EXIT_OK);
     }
 
@@ -276,7 +294,7 @@ fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
         let title = family
             .as_ref()
             .map(Family::display)
-            .unwrap_or("（未声明生态）");
+            .unwrap_or("(no family declared)");
         println!("{title}");
         for p in session
             .plugins
@@ -305,7 +323,7 @@ fn print_plugin_row(p: &crate::plugins::InstalledPlugin) {
     }
 }
 
-/// `plugin current`：各生态的当前插件，以及候选与得分。
+/// `plugin current`: the current plugin per family, plus candidates and scores.
 fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
     let Some(root) = session.project_root().map(PathBuf::from) else {
@@ -314,7 +332,7 @@ fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
 
     let families = detect::score_all(&session.plugins, &root, &session.project);
     if families.is_empty() {
-        println!("没有可参与裁决的插件。");
+        println!("No plugin can take part in the resolution.");
         return Ok(EXIT_OK);
     }
 
@@ -336,10 +354,10 @@ fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
             } else {
                 " "
             };
-            println!("  {} {:<8} {:>4} 分", mark, p.name, p.score);
+            println!("  {} {:<8} score {:>4}", mark, p.name, p.score);
         }
         if let Some(pinned) = session.project.pinned_plugin(family.as_str()) {
-            println!("  固化：{pinned}");
+            println!("  pinned: {pinned}");
         }
         println!();
     }
@@ -347,13 +365,13 @@ fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
     Ok(EXIT_OK)
 }
 
-/// `plugin set <name>`：固化到最近的一层 `.pmpx.toml`。
+/// `plugin set <name>`: pin it in the nearest layer of `.pmpx.toml`.
 fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
     let Some(plugin) = session.plugins.by_name(name) else {
         return Err(PmpxError::not_found(format!(
-            "找不到插件 {name}。已装的是：{}",
+            "no plugin named {name}. Installed: {}",
             session
                 .plugins
                 .usable()
@@ -365,7 +383,7 @@ fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
     let Some(family) = plugin.family.clone() else {
         return Err(PmpxError::Usage(format!(
-            "{name} 的 manifest 没有声明 family，无法固化。"
+            "{name}'s manifest declares no family, so it cannot be pinned."
         )));
     };
 
@@ -377,7 +395,7 @@ fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
     .map_err(PmpxError::Other)?;
 
     println!(
-        "已固化 {} = \"{}\" 到 {}",
+        "Pinned {} = \"{}\" in {}",
         family.as_str(),
         plugin.name,
         path.display()
@@ -398,7 +416,7 @@ fn plugin_unset(args: &Cli, family: Option<&str>, yes: bool) -> crate::error::Re
         Some(f) => {
             if !existing.plugin.contains_key(f) {
                 return Err(PmpxError::Usage(format!(
-                    "{} 里没有固化过 {f}",
+                    "{} has no pin for {f}",
                     path.display()
                 )));
             }
@@ -406,22 +424,22 @@ fn plugin_unset(args: &Cli, family: Option<&str>, yes: bool) -> crate::error::Re
                 cfg.plugin.remove(f);
             })
             .map_err(PmpxError::Other)?;
-            println!("已从 {} 删掉 {f} 的固化", path.display());
+            println!("Removed the pin for {f} from {}", path.display());
         }
 
         None => {
             if existing.plugin.is_empty() {
                 return Err(PmpxError::Usage(format!(
-                    "{} 里没有任何固化项",
+                    "{} has no pins at all",
                     path.display()
                 )));
             }
 
-            // 省略 family 且存在多个固化时要求 `--yes`，否则先列出将删除的项并以
-            // 退出码 2 退出。
+            // With the family omitted and more than one pin present, `--yes` is required;
+            // otherwise list what would be deleted and exit with code 2.
             if existing.plugin.len() > 1 && !yes {
                 let mut msg = format!(
-                    "{} 里有 {} 个固化项，全部删除需要 `--yes`：",
+                    "{} has {} pins; deleting all of them needs `--yes`:",
                     path.display(),
                     existing.plugin.len()
                 );
@@ -436,18 +454,23 @@ fn plugin_unset(args: &Cli, family: Option<&str>, yes: bool) -> crate::error::Re
                 cfg.plugin.clear();
             })
             .map_err(PmpxError::Other)?;
-            println!("已从 {} 删掉 {} 的固化", path.display(), removed.join(", "));
+            println!(
+                "Removed the pins for {} from {}",
+                removed.join(", "),
+                path.display()
+            );
         }
     }
 
     Ok(EXIT_OK)
 }
 
-/// 写哪一份 `.pmpx.toml`。
+/// Which `.pmpx.toml` to write.
 ///
-/// 最近的一层优先：已经存在的那份就是用户选定的那一层；一份都没有时写项目根。
+/// The nearest layer wins: an existing file is the layer the user chose; when there is none,
+/// write at the project root.
 fn target_config_path(session: &Session) -> PathBuf {
-    // `walk.dirs` 是从近到远的
+    // `walk.dirs` goes from nearest to farthest
     for dir in &session.walk.dirs {
         let p = dir.join(".pmpx.toml");
         if p.is_file() {
@@ -462,22 +485,24 @@ fn target_config_path(session: &Session) -> PathBuf {
     base.join(".pmpx.toml")
 }
 
-/// 读-改-写一份 `.pmpx.toml`，保留不认识的键。
+/// Read-modify-write one `.pmpx.toml`, keeping keys it does not recognise.
 fn edit_project_config(path: &Path, edit: impl FnOnce(&mut ProjectConfig)) -> Result<()> {
     let mut cfg = ProjectConfig::load_from(path)?.unwrap_or_default();
     edit(&mut cfg);
 
-    // 空配置就别留下一个空文件
+    // Do not leave an empty file behind for an empty config
     if cfg.plugin.is_empty() && cfg.scripts.is_empty() && cfg.extra.is_empty() {
         if path.is_file() {
-            std::fs::remove_file(path)
-                .with_context(|| format!("删掉空的配置文件失败：{}", path.display()))?;
+            std::fs::remove_file(path).with_context(|| {
+                format!("failed to delete the empty config file: {}", path.display())
+            })?;
         }
         return Ok(());
     }
 
-    let text = toml::to_string_pretty(&cfg).context("序列化项目配置失败")?;
-    std::fs::write(path, text).with_context(|| format!("写项目配置失败：{}", path.display()))
+    let text = toml::to_string_pretty(&cfg).context("failed to serialise the project config")?;
+    std::fs::write(path, text)
+        .with_context(|| format!("failed to write the project config: {}", path.display()))
 }
 
 /// `plugin add`
@@ -486,19 +511,19 @@ fn plugin_add(args: &Cli, names: &[String], version: Option<&str>) -> crate::err
 
     if version.is_some() && names.len() > 1 {
         return Err(PmpxError::Usage(
-            "--version 只能与一个插件名同用".to_string(),
+            "--version can only be used with a single plugin name".to_string(),
         ));
     }
 
     for name in names {
-        println!("正在装 {name}……");
+        println!("Installing {name}...");
         let installed = session
             .kit
             .install(name, version)
             .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
 
         println!(
-            "  {} v{}（{}）→ {}",
+            "  {} v{} ({}) -> {}",
             installed.crate_name,
             installed.version,
             describe_source(installed.source),
@@ -518,7 +543,7 @@ fn plugin_rm(args: &Cli, names: &[String]) -> crate::error::Result<u8> {
             .kit
             .uninstall(name)
             .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
-        println!("已卸掉 {name}");
+        println!("Removed {name}");
     }
 
     Ok(EXIT_OK)
@@ -530,11 +555,11 @@ fn plugin_update(args: &Cli, names: &[String], version: Option<&str>) -> crate::
 
     if version.is_some() && names.len() > 1 {
         return Err(PmpxError::Usage(
-            "--version 只能与一个插件名同用".to_string(),
+            "--version can only be used with a single plugin name".to_string(),
         ));
     }
 
-    // 不带名字 = 全部更新
+    // No names = update all of them
     let targets: Vec<String> = if names.is_empty() {
         session.plugins.usable().map(|p| p.name.clone()).collect()
     } else {
@@ -542,7 +567,7 @@ fn plugin_update(args: &Cli, names: &[String], version: Option<&str>) -> crate::
     };
 
     if targets.is_empty() {
-        println!("没有可更新的插件。");
+        println!("No plugins to update.");
         return Ok(EXIT_OK);
     }
 
@@ -551,25 +576,26 @@ fn plugin_update(args: &Cli, names: &[String], version: Option<&str>) -> crate::
             .kit
             .update(&name, version)
             .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
-        println!("{} → v{}", installed.crate_name, installed.version);
+        println!("{} -> v{}", installed.crate_name, installed.version);
     }
 
     Ok(EXIT_OK)
 }
 
-/// `plugin search` —— 在 crates.io 上搜。
+/// `plugin search` -- search crates.io.
 fn plugin_search(args: &Cli, keyword: &str, limit: usize) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
-    // 用户敲的是短名（`cargo`），而 crates.io 上是 `pmpx-plugin-cargo`。直接搜短名：
-    // crates.io 的搜索是全文的，`pmpx-plugin-` 这个前缀不是关键词。
+    // The user types the short name (`cargo`) while crates.io has `pmpx-plugin-cargo`. Search
+    // the short name directly: crates.io search is full text, so the `pmpx-plugin-` prefix is
+    // not a keyword.
     let results = session
         .kit
         .search(keyword, limit)
         .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
 
     if results.is_empty() {
-        println!("crates.io 上没有匹配 {keyword:?} 的 crate。");
+        println!("crates.io has no crate matching {keyword:?}.");
         return Ok(EXIT_OK);
     }
 
@@ -583,7 +609,7 @@ fn plugin_search(args: &Cli, keyword: &str, limit: usize) -> crate::error::Resul
     Ok(EXIT_OK)
 }
 
-/// `plugin info <name>`：本地安装状态 + crates.io 上的信息。
+/// `plugin info <name>`: local install state plus crates.io information.
 fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
@@ -591,26 +617,28 @@ fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
     if let Some(p) = session.plugins.by_name(name) {
         found = true;
-        println!("已安装");
-        println!("  自报名   {}", p.name);
-        println!("  crate    {}", p.crate_name);
-        println!("  版本     {}", p.version);
+        println!("Installed");
+        println!("  {:<15} {}", "reported name", p.name);
+        println!("  {:<15} {}", "crate", p.crate_name);
+        println!("  {:<15} {}", "version", p.version);
         println!(
-            "  生态     {}",
+            "  {:<15} {}",
+            "family",
             p.family
                 .as_ref()
                 .map(Family::as_str)
-                .unwrap_or("（未声明）")
+                .unwrap_or("(not declared)")
         );
         println!(
-            "  ABI      {}",
+            "  {:<15} {}",
+            "ABI",
             p.abi
                 .map(|a| a.to_string())
-                .unwrap_or_else(|| "（未声明）".into())
+                .unwrap_or_else(|| "(not declared)".into())
         );
-        println!("  目录     {}", p.dir.display());
-        println!("  强证据   {}", join_or_dash(&p.strong));
-        println!("  弱证据   {}", join_or_dash(&p.weak));
+        println!("  {:<15} {}", "directory", p.dir.display());
+        println!("  {:<15} {}", "strong evidence", join_or_dash(&p.strong));
+        println!("  {:<15} {}", "weak evidence", join_or_dash(&p.weak));
         if let Some(why) = p.problem() {
             println!("  ⚠ {why}");
         }
@@ -624,43 +652,43 @@ fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
             notes: Vec::new(),
         }) {
             let d = backend.diagnostics();
-            println!("插件自报");
-            println!("  名字     {}", d.name);
-            println!("  生态     {}", d.family);
-            println!("  编译于   {}", d.rustc_version);
-            println!("  target   {}", d.target);
+            println!("Plugin reports");
+            println!("  {:<15} {}", "name", d.name);
+            println!("  {:<15} {}", "family", d.family);
+            println!("  {:<15} {}", "compiled with", d.rustc_version);
+            println!("  {:<15} {}", "target", d.target);
             println!();
         }
     }
 
-    // crates.io 那边
+    // The crates.io side
     let crate_name = session.kit.config().normalize_crate_name(name);
     match session.kit.view(&crate_name) {
         Ok(Some(info)) => {
             found = true;
             println!("crates.io");
-            println!("  crate    {}", info.name);
-            println!("  最新     {}", info.version);
+            println!("  {:<15} {}", "crate", info.name);
+            println!("  {:<15} {}", "latest", info.version);
             if let Some(d) = info.description {
-                println!("  描述     {d}");
+                println!("  {:<15} {d}", "description");
             }
             if let Some(r) = info.repository {
-                println!("  仓库     {r}");
+                println!("  {:<15} {r}", "repository");
             }
         }
         Ok(None) => {
             if !found {
-                println!("crates.io 上没有 {crate_name}。");
+                println!("crates.io has no {crate_name}.");
             }
         }
         Err(e) => {
-            // 离线 / 网络不通不该让本地信息也白看
-            eprintln!("pmpx: 查 crates.io 失败：{e}");
+            // Being offline or having no network must not hide the local information
+            eprintln!("pmpx: crates.io lookup failed: {e}");
         }
     }
 
     if !found {
-        return Err(PmpxError::not_found(format!("找不到插件 {name}。")));
+        return Err(PmpxError::not_found(format!("no plugin named {name}.")));
     }
 
     Ok(EXIT_OK)
@@ -668,7 +696,7 @@ fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
 fn join_or_dash(items: &[String]) -> String {
     if items.is_empty() {
-        "（无）".to_string()
+        "(none)".to_string()
     } else {
         items.join(", ")
     }
@@ -677,7 +705,7 @@ fn join_or_dash(items: &[String]) -> String {
 fn describe_source(source: crate_plugin_kit::cache::InstallSource) -> &'static str {
     match source {
         crate_plugin_kit::cache::InstallSource::Prebuilt => "prebuilt",
-        crate_plugin_kit::cache::InstallSource::BuildHost => "本机编译",
+        crate_plugin_kit::cache::InstallSource::BuildHost => "built locally",
     }
 }
 
@@ -697,8 +725,8 @@ fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
                     Ok(EXIT_OK)
                 }
                 None => Err(PmpxError::Usage(format!(
-                    "{} 里没有 {key}（配置文件：{}）",
-                    "全局配置",
+                    "{} has no {key} (config file: {})",
+                    "global config",
                     path.display()
                 ))),
             }
@@ -716,7 +744,7 @@ fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
             std::fs::write(&path, text).map_err(|e| PmpxError::Other(e.into()))?;
 
             println!(
-                "已写入 {key} = {} 到 {}",
+                "Wrote {key} = {} to {}",
                 render_value(&parse_value(value)),
                 path.display()
             );
@@ -725,19 +753,19 @@ fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
     }
 }
 
-/// 读一份 TOML 成 table；文件不存在 = 空表。
+/// Read a TOML file into a table; a missing file = an empty table.
 fn read_toml_table(path: &Path) -> Result<toml::Table> {
     match std::fs::read_to_string(path) {
         Ok(text) if !text.trim().is_empty() => {
-            toml::from_str(&text).with_context(|| format!("解析 {} 失败", path.display()))
+            toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
         }
         Ok(_) => Ok(toml::Table::new()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml::Table::new()),
-        Err(e) => Err(e).with_context(|| format!("读 {} 失败", path.display())),
+        Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
     }
 }
 
-/// 按 `a.b.c` 取值。
+/// Look up a value by `a.b.c`.
 fn lookup_dotted<'a>(table: &'a toml::Table, key: &str) -> Option<&'a toml::Value> {
     let mut parts = key.split('.');
     let first = parts.next()?;
@@ -749,11 +777,11 @@ fn lookup_dotted<'a>(table: &'a toml::Table, key: &str) -> Option<&'a toml::Valu
     Some(current)
 }
 
-/// 按 `a.b.c` 写值，中间缺失的表会被建出来。
+/// Write a value by `a.b.c`; missing intermediate tables are created.
 fn insert_dotted(table: &mut toml::Table, key: &str, value: toml::Value) -> Result<()> {
     let parts: Vec<&str> = key.split('.').collect();
     if parts.iter().any(|p| p.is_empty()) {
-        anyhow::bail!("键名不能有空段：{key}");
+        anyhow::bail!("a key must not have empty segments: {key}");
     }
 
     let mut current = table;
@@ -764,17 +792,18 @@ fn insert_dotted(table: &mut toml::Table, key: &str, value: toml::Value) -> Resu
 
         current = entry
             .as_table_mut()
-            .with_context(|| format!("{part} 不是一个表，不能往里写"))?;
+            .with_context(|| format!("{part} is not a table, cannot write into it"))?;
     }
 
     current.insert(parts[parts.len() - 1].to_string(), value);
     Ok(())
 }
 
-/// 把命令行上的一串字符解析成 TOML 值。
+/// Parse a string from the command line into a TOML value.
 ///
-/// 顺序刻意是"最具体到最宽松"：`true` → 整数 → 数组 → 字符串。所以
-/// `pmpx config set x 123` 存的是数字，想存字符串就写 `"123"`（带引号）。
+/// The order is deliberately "most specific to most permissive": `true` -> integer -> array
+/// -> string. So `pmpx config set x 123` stores a number; to store a string, write `"123"`
+/// (with quotes).
 fn parse_value(raw: &str) -> toml::Value {
     if raw == "true" {
         return toml::Value::Boolean(true);
@@ -786,7 +815,7 @@ fn parse_value(raw: &str) -> toml::Value {
         return toml::Value::Integer(n);
     }
 
-    // 数组 / 带引号的字符串借 TOML 自己的解析器
+    // Arrays and quoted strings borrow TOML's own parser
     if let Ok(doc) = toml::from_str::<toml::Table>(&format!("v = {raw}")) {
         if let Some(v) = doc.get("v") {
             return v.clone();
@@ -796,7 +825,7 @@ fn parse_value(raw: &str) -> toml::Value {
     toml::Value::String(raw.to_string())
 }
 
-/// 打印一个 TOML 值。字符串不加引号 —— 用户要的是值，不是语法。
+/// Print a TOML value. Strings get no quotes -- the user wants the value, not the syntax.
 fn render_value(v: &toml::Value) -> String {
     match v {
         toml::Value::String(s) => s.clone(),
@@ -811,7 +840,7 @@ fn render_value(v: &toml::Value) -> String {
 fn completion(shell: clap_complete::Shell) -> crate::error::Result<u8> {
     let mut cmd = Cli::command();
     let name = cmd.get_name().to_string();
-    // 输出到 stdout，用户自己重定向 —— pmpx 不去猜该往哪个文件写。
+    // Print to stdout and let the user redirect -- pmpx does not guess which file to write.
     clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
     Ok(EXIT_OK)
 }
@@ -835,7 +864,7 @@ mod tests {
     #[test]
     fn parse_value_recognises_arrays() {
         let v = parse_value("[\"rust\", \"node\"]");
-        let arr = v.as_array().expect("应当是数组");
+        let arr = v.as_array().expect("should be an array");
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0].as_str(), Some("rust"));
     }
@@ -843,7 +872,7 @@ mod tests {
     #[test]
     fn parse_value_falls_back_to_a_string() {
         assert_eq!(parse_value("node"), toml::Value::String("node".to_string()));
-        // 数字想存成字符串就得带引号
+        // A number stored as a string has to carry quotes
         assert_eq!(
             parse_value("\"123\""),
             toml::Value::String("123".to_string())
@@ -891,7 +920,7 @@ x = 1
     fn insert_dotted_refuses_to_clobber_a_non_table() {
         let mut doc: toml::Table = toml::from_str("a = 1\n").unwrap();
         let err = insert_dotted(&mut doc, "a.b", toml::Value::Integer(2)).unwrap_err();
-        assert!(err.to_string().contains("不是一个表"), "{err}");
+        assert!(err.to_string().contains("not a table"), "{err}");
     }
 
     #[test]
@@ -918,7 +947,7 @@ x = 1
 
     #[test]
     fn join_or_dash_handles_the_empty_case() {
-        assert_eq!(join_or_dash(&[]), "（无）");
+        assert_eq!(join_or_dash(&[]), "(none)");
         assert_eq!(join_or_dash(&["a".into(), "b".into()]), "a, b");
     }
 }

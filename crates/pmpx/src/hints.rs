@@ -1,15 +1,17 @@
-//! 零插件时的提示表。
+//! Hint table used when no plugin is installed.
 //!
-//! 它只在"一个插件都没装"时给出一句"这看起来是个 rust 项目"，**不参与任何裁决**：
-//! 装上插件之后，检测完全由各插件 manifest 的 `detect` 段决定，这张表连读都不读。
-//! 匹配到了也不推荐装哪个插件。
+//! It only produces a "this looks like a rust project" line when **no plugin is installed at all**,
+//! and it **takes no part in any resolution**: once plugins are installed, detection is decided
+//! entirely by the `detect` section of each plugin manifest, and this table is not even read.
+//! A match does not recommend which plugin to install either.
 
 use std::path::Path;
 
-/// 生态 → 典型的特征文件。
+/// Family → typical detect files.
 ///
-/// 值里可以出现 `*.ext` 形式，它会被当成"目录里有任意这个扩展名的文件" ——
-/// `*.csproj` 那种文件名是项目名的清单没法列全。
+/// Values may use the `*.ext` form, which is treated as "the directory contains any file with this
+/// extension" — a manifest whose file name is the project name, like `*.csproj`, cannot be listed
+/// exhaustively.
 pub const ECOSYSTEM_HINTS: &[(&str, &[&str])] = &[
     ("rust", &["Cargo.toml", "Cargo.lock"]),
     (
@@ -32,16 +34,16 @@ pub const ECOSYSTEM_HINTS: &[(&str, &[&str])] = &[
     ("ruby", &["Gemfile"]),
 ];
 
-/// 一次探测的结果。
+/// The result of one probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hint {
-    /// 生态名。与 `Family` 的键名同口径。
+    /// Family name. Same convention as `Family`'s key name.
     pub family: &'static str,
-    /// 实际命中的文件（按 [`ECOSYSTEM_HINTS`] 里的声明顺序）。
+    /// The files actually matched (in declaration order in [`ECOSYSTEM_HINTS`]).
     pub matched: Vec<String>,
 }
 
-/// 在 `dir` 里找线索，只看这一层，不递归。
+/// Look for clues in `dir`; only this level is looked at, no recursion.
 pub fn probe(dir: &Path) -> Vec<Hint> {
     let mut out = Vec::new();
 
@@ -60,7 +62,7 @@ pub fn probe(dir: &Path) -> Vec<Hint> {
     out
 }
 
-/// 某一条声明在 `dir` 里命中了没有。
+/// Whether one declaration matched in `dir`.
 fn hits(dir: &Path, pattern: &str) -> bool {
     match pattern.strip_prefix("*.") {
         Some(ext) => {
@@ -75,7 +77,8 @@ fn hits(dir: &Path, pattern: &str) -> bool {
                 })
                 .unwrap_or(false)
         }
-        // 存在就算命中，**目录也算** —— 只回答"有没有这个东西"，不回答"它是什么"。
+        // Existing counts as a match, **a directory too** — this only answers "is this thing
+        // there", not "what is it".
         None => dir.join(pattern).exists(),
     }
 }
@@ -140,8 +143,8 @@ mod tests {
     #[test]
     fn wildcard_does_not_match_a_bare_extension_or_a_prefix() {
         let tmp = tempfile::tempdir().unwrap();
-        touch(tmp.path(), "csproj"); // 没有点
-        touch(tmp.path(), "csproj.bak"); // 后缀不对
+        touch(tmp.path(), "csproj"); // no dot
+        touch(tmp.path(), "csproj.bak"); // wrong suffix
 
         assert!(probe(tmp.path()).is_empty());
     }
@@ -161,18 +164,18 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("nested")).unwrap();
         touch(&tmp.path().join("nested"), "Cargo.toml");
 
-        assert!(probe(tmp.path()).is_empty(), "只看这一层");
+        assert!(probe(tmp.path()).is_empty(), "only this level is looked at");
     }
 
-    /// 提示文案里显示的生态名必须是纯小写 ASCII。
+    /// The family name shown in the hint text must be lowercase ASCII only.
     #[test]
     fn every_hint_family_is_lowercase_ascii() {
         for (family, patterns) in ECOSYSTEM_HINTS {
             assert!(
                 family.chars().all(|c| c.is_ascii_lowercase()),
-                "生态名应当是纯小写 ASCII：{family}"
+                "the family name should be lowercase ASCII only: {family}"
             );
-            assert!(!patterns.is_empty(), "{family} 没有任何特征文件");
+            assert!(!patterns.is_empty(), "{family} has no detect files");
         }
     }
 
@@ -182,7 +185,11 @@ mod tests {
             let mut sorted = patterns.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
-            assert_eq!(sorted.len(), patterns.len(), "{family} 里有重复项");
+            assert_eq!(
+                sorted.len(),
+                patterns.len(),
+                "duplicate entries in {family}"
+            );
         }
     }
 }

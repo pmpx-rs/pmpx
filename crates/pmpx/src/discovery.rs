@@ -1,8 +1,8 @@
-//! 项目根发现。
+//! Project root discovery.
 //!
-//! 两个入口共用同一次上溯：`find_project_root` 回答"在哪执行"（只取最近命中的一层），
-//! `collect_config_paths` 回答"按什么规则执行"（沿途每一份 `.pmpx.toml` 都收）。
-//! 停止条件相同，结果是两种东西。
+//! Two entry points share one walk up: `find_project_root` answers "where do I run" (only the
+//! nearest match), and `collect_config_paths` answers "which rules apply" (every `.pmpx.toml` along
+//! the way). The stop conditions are identical; the results are two different things.
 //!
 //! ```text
 //! ~/repo/.git
@@ -11,57 +11,67 @@
 //! cwd = ~/repo/crates/core/src/
 //!
 //! find_project_root    → ~/repo/crates/core
-//! collect_config_paths → [core/.pmpx.toml, repo/.pmpx.toml]  （两份都读得到）
+//! collect_config_paths → [core/.pmpx.toml, repo/.pmpx.toml]  (both are read)
 //! ```
 
 use std::path::{Path, PathBuf};
 
 use crate::config::DiscoveryConfig;
 
-/// 走出来的目录列表：**从起点到最远**（由近及远）。
+/// The directories walked: **from the start outward** (near to far).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Walk {
-    /// 依次检查的目录，`[0]` 是起点。
+    /// Directories checked in order, `[0]` is the start.
     pub dirs: Vec<PathBuf>,
-    /// 为什么停下来。`pmpx info` 会把它显示出来 ——
-    /// "为什么没找到项目"最常见的原因就是撞上了其中某一个。
+    /// Why the walk stopped. `pmpx info` displays it —
+    /// "why was no project found" is most often answered by having hit one of these.
     pub stopped: StopReason,
 }
 
-/// 上溯停止的原因。
+/// Why walking up stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopReason {
-    /// 走到文件系统根了。
+    /// Reached the filesystem root.
     FilesystemRoot,
-    /// 撞到了 `$HOME` —— 再往上不是用户的项目。
+    /// Hit `$HOME` — anything above it is no longer the user's project.
     Home,
-    /// 撞到了 `.git`。
+    /// Hit `.git`.
     GitRoot,
-    /// 到了 `max_depth` 上限。
+    /// Reached the `max_depth` limit.
     MaxDepth,
-    /// 调用方明确不要上溯（`--no-walk-up` 或 `[discovery] walk_up = false`）。
+    /// The caller explicitly asked not to walk up (`--no-walk-up` or `[discovery] walk_up = false`).
     WalkUpDisabled,
 }
 
 impl StopReason {
-    /// 人类可读的解释，给 `pmpx info` 用。
+    /// Human-readable explanation, for `pmpx info`.
     pub fn describe(self, max_depth: usize) -> String {
         match self {
-            StopReason::FilesystemRoot => "到达文件系统根".into(),
-            StopReason::Home => "到达 $HOME".into(),
-            StopReason::GitRoot => "到达 .git".into(),
-            StopReason::MaxDepth => format!("到达 max_depth 上限（{max_depth} 层）"),
+            StopReason::FilesystemRoot => "reached the filesystem root".into(),
+            StopReason::Home => "reached $HOME".into(),
+            StopReason::GitRoot => "reached .git".into(),
+            StopReason::MaxDepth => format!("reached the max_depth limit ({})", dirs(max_depth)),
             StopReason::WalkUpDisabled => "--no-walk-up / [discovery] walk_up = false".into(),
         }
     }
 }
 
-/// 从 `start` 向上走，收集要检查的目录。
+/// `1 directory` / `6 directories`.
 ///
-/// `max_depth` 是**最多检查几个目录（含起点）**，不是"最多上溯几层"。
+/// Every count around here is routinely 1, and "Walked up 1 directories" is exactly the kind of
+/// thing users report as a bug.
+pub(crate) fn dirs(n: usize) -> String {
+    format!("{n} director{}", if n == 1 { "y" } else { "ies" })
+}
+
+/// Walk up from `start`, collecting the directories to check.
 ///
-/// `$HOME` 与 `.git` 都是**检查完当前目录之后**才停：`$HOME` 本身仍然是一个候选，
-/// 所以 `~/Cargo.toml` 或 `~/.pmpx.toml` 能生效。我们从不走到 `$HOME` 之上。
+/// `max_depth` is **how many directories may be checked at most (including the start)**, not
+/// "how many levels to walk up".
+///
+/// Both `$HOME` and `.git` stop the walk **after the current directory has been checked**: `$HOME`
+/// itself is still a candidate, so `~/Cargo.toml` or `~/.pmpx.toml` can take effect. We never walk
+/// above `$HOME`.
 pub fn walk(start: &Path, cfg: &DiscoveryConfig) -> Walk {
     let start = normalize(start);
     let mut dirs = vec![start.clone()];
@@ -82,7 +92,8 @@ pub fn walk(start: &Path, cfg: &DiscoveryConfig) -> Walk {
             break StopReason::MaxDepth;
         }
 
-        // 顺序即语义：`.git` 与 `$HOME` 都是检查完当前目录之后才停。
+        // Order is semantics: both `.git` and `$HOME` stop only after the current directory has
+        // been checked.
         if cfg.stop_at_git && current.join(".git").exists() {
             break StopReason::GitRoot;
         }
@@ -91,7 +102,7 @@ pub fn walk(start: &Path, cfg: &DiscoveryConfig) -> Walk {
         }
 
         match current.parent() {
-            // `parent() == Some(self)` 表示到了文件系统根（`/` 或 `C:\`）
+            // `parent() == Some(self)` means the filesystem root (`/` or `C:\`)
             Some(parent) if parent != current => {
                 current = parent.to_path_buf();
                 dirs.push(current.clone());
@@ -103,10 +114,11 @@ pub fn walk(start: &Path, cfg: &DiscoveryConfig) -> Walk {
     Walk { dirs, stopped }
 }
 
-/// 找出项目根。
+/// Find the project root.
 ///
-/// `is_root` 由调用方给，通常是"这个目录里有 `.pmpx.toml`，或者有任一已装插件
-/// 声明的 detect 文件"。做成参数是为了让本模块不认识插件。
+/// `is_root` comes from the caller, usually "this directory has a `.pmpx.toml`, or has one of the
+/// detect files declared by an installed plugin". It is a parameter so that this module does not
+/// need to know about plugins.
 pub fn find_project_root(
     start: &Path,
     cfg: &DiscoveryConfig,
@@ -115,10 +127,10 @@ pub fn find_project_root(
     walk(start, cfg).dirs.into_iter().find(|d| is_root(d))
 }
 
-/// 收集所有 `.pmpx.toml`，**从近到远**。
+/// Collect every `.pmpx.toml`, **near to far**.
 ///
-/// 停止条件与 [`find_project_root`] 一致；这个顺序就是
-/// [`crate::config::MergedProjectConfig`] 的"近者优先"合并口径。
+/// The stop conditions match [`find_project_root`]; this order is the "nearest wins" merge rule of
+/// [`crate::config::MergedProjectConfig`].
 pub fn collect_config_paths(start: &Path, cfg: &DiscoveryConfig) -> Vec<PathBuf> {
     walk(start, cfg)
         .dirs
@@ -128,10 +140,10 @@ pub fn collect_config_paths(start: &Path, cfg: &DiscoveryConfig) -> Vec<PathBuf>
         .collect()
 }
 
-/// 把一个目录规整成可以直接比较的形式。
+/// Normalize a directory into a directly comparable form.
 ///
-/// Windows 上 `C:\Users\me` 与 `C:\Users\me\` 是同一个目录但 `PathBuf` 不相等，
-/// 而 `$HOME` 判断用的正是相等；`.` 与 `..` 也要消掉。
+/// On Windows `C:\Users\me` and `C:\Users\me\` are the same directory but not equal as `PathBuf`s,
+/// and the `$HOME` check is exactly that equality; `.` and `..` must be removed too.
 fn normalize(p: &Path) -> PathBuf {
     let absolute = if p.is_absolute() {
         p.to_path_buf()
@@ -141,12 +153,12 @@ fn normalize(p: &Path) -> PathBuf {
             .unwrap_or_else(|_| p.to_path_buf())
     };
 
-    // 不用 `canonicalize`：它会解析符号链接（/tmp → /private/tmp），
-    // 让报出来的路径和用户看到的不一致。所以只做词法消解。
+    // Not `canonicalize`: it resolves symlinks (/tmp → /private/tmp), which would make the reported
+    // path differ from what the user sees. Lexical resolution only.
     lexical_normalize(&absolute)
 }
 
-/// 纯词法地把 `..` 与 `.` 消掉，不碰文件系统。
+/// Remove `..` and `.` purely lexically, without touching the filesystem.
 fn lexical_normalize(p: &Path) -> PathBuf {
     use std::path::Component;
 
@@ -155,7 +167,7 @@ fn lexical_normalize(p: &Path) -> PathBuf {
         match comp {
             Component::CurDir => {}
             Component::ParentDir => {
-                // 消掉一层；已经在根就保留
+                // Pop one level; keep it if already at the root
                 if !out.pop() {
                     out.push("..");
                 }
@@ -181,7 +193,7 @@ mod tests {
         }
     }
 
-    /// 造一棵目录树（`dirs` 是相对 `<tmp>` 的目录）。
+    /// Build a directory tree (`dirs` are relative to `<tmp>`).
     fn tree(dirs: &[&str]) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         for d in dirs {
@@ -214,18 +226,18 @@ mod tests {
         assert!(w.dirs[1].ends_with("b"), "{:?}", w.dirs[1]);
         assert!(w.dirs[2].ends_with("a"), "{:?}", w.dirs[2]);
 
-        // 逐层上溯，一层都不能跳
+        // Walk up level by level; not a single level may be skipped
         for pair in w.dirs.windows(2) {
             assert_eq!(
                 pair[1].as_path(),
                 pair[0].parent().unwrap(),
-                "从 {} 应当走到它的父目录",
+                "{} should walk up to its parent directory",
                 pair[0].display()
             );
         }
 
-        // 停在哪取决于测试跑在哪 —— 临时目录可能先撞上 max_depth，也可能先撞上 $HOME，
-        // 所以只断言"是其中一个"，不写死一个。
+        // Where it stops depends on where the test runs — a temp directory may hit max_depth or
+        // $HOME first, so only assert "one of them", never a single one.
         assert!(w.dirs.len() <= cfg().max_depth);
         assert!(
             matches!(
@@ -235,12 +247,13 @@ mod tests {
                     | StopReason::Home
                     | StopReason::GitRoot
             ),
-            "意外停在 {:?}",
+            "unexpectedly stopped at {:?}",
             w.stopped
         );
     }
 
-    /// 上限足够大时，一定会走到 `$HOME` 或文件系统根 —— 不会无限上溯。
+    /// With a large enough limit the walk always reaches `$HOME` or the filesystem root — it never
+    /// walks up forever.
     #[test]
     fn a_generous_max_depth_still_terminates() {
         let tmp = tree(&["a/b/c"]);
@@ -250,13 +263,16 @@ mod tests {
         let w = walk(&tmp.path().join("a/b/c"), &c);
         assert!(
             matches!(w.stopped, StopReason::Home | StopReason::FilesystemRoot),
-            "意外停在 {:?}",
+            "unexpectedly stopped at {:?}",
             w.stopped
         );
-        assert!(w.dirs.len() < 4096, "不该真的走满上限");
+        assert!(
+            w.dirs.len() < 4096,
+            "should not actually use up the whole limit"
+        );
     }
 
-    /// `walk_up = false`（或 `--no-walk-up`）：**只有起点这一个候选**。
+    /// `walk_up = false` (or `--no-walk-up`): **the start is the only candidate**.
     #[test]
     fn walk_up_disabled_returns_only_the_start() {
         let tmp = tree(&["a/b/c"]);
@@ -276,10 +292,26 @@ mod tests {
 
         assert_eq!(w.dirs.len(), 3);
         assert_eq!(w.stopped, StopReason::MaxDepth);
-        assert_eq!(w.stopped.describe(3), "到达 max_depth 上限（3 层）");
+        assert_eq!(
+            w.stopped.describe(3),
+            "reached the max_depth limit (3 directories)"
+        );
     }
 
-    /// `.git` 之后不再往上 —— 仓库根再往上不属于本项目。
+    /// 1 must not come out as "1 directories" -- these counts are routinely 1, and it is exactly
+    /// the kind of thing users report as a bug.
+    #[test]
+    fn a_single_directory_is_not_plural() {
+        assert_eq!(dirs(1), "1 directory");
+        assert_eq!(dirs(0), "0 directories");
+        assert_eq!(dirs(6), "6 directories");
+        assert_eq!(
+            StopReason::MaxDepth.describe(1),
+            "reached the max_depth limit (1 directory)"
+        );
+    }
+
+    /// Nothing above `.git` — anything above the repository root is not part of this project.
     #[test]
     fn stops_after_a_directory_containing_git() {
         let tmp = tree(&["repo/web/src"]);
@@ -288,7 +320,7 @@ mod tests {
         let w = walk(&tmp.path().join("repo/web/src"), &cfg());
 
         assert_eq!(w.stopped, StopReason::GitRoot);
-        // repo 是最后一个候选，**它本身要被检查**
+        // repo is the last candidate, and **it is checked itself**
         assert!(w.dirs.last().unwrap().ends_with("repo"));
         let above_tmp = normalize(tmp.path());
         let above_tmp = above_tmp.parent().unwrap();
@@ -304,12 +336,12 @@ mod tests {
         c.stop_at_git = false;
         let w = walk(&tmp.path().join("repo/web/src"), &c);
 
-        // 越过了含 .git 的 repo
+        // walked past the repo containing .git
         assert!(w.dirs.len() > 3);
         assert_ne!(w.stopped, StopReason::GitRoot);
     }
 
-    /// `.git` 是个**文件**（worktree / submodule）时同样算数。
+    /// A `.git` **file** (worktree / submodule) counts just the same.
     #[test]
     fn git_file_also_stops_the_walk() {
         let tmp = tree(&["repo/web/src"]);
@@ -330,7 +362,10 @@ mod tests {
         })
         .unwrap();
 
-        assert!(root.ends_with("web"), "根应当是 web，实际 {root:?}");
+        assert!(
+            root.ends_with("web"),
+            "the root should be web, got {root:?}"
+        );
     }
 
     #[test]
@@ -356,7 +391,7 @@ mod tests {
         assert_eq!(root, normalize(&tmp.path().join("proj")));
     }
 
-    /// 配置能看到项目根之外的那一层。
+    /// Config can see the layer above the project root.
     #[test]
     fn config_collection_reaches_above_the_project_root() {
         let tmp = tree(&["repo/crates/core/src"]);
@@ -370,7 +405,7 @@ mod tests {
         let root = find_project_root(&start, &cfg(), |d| d.join("Cargo.toml").exists()).unwrap();
         assert!(root.ends_with("core"));
 
-        // 两份都要看得到，从近到远
+        // Both must be visible, near to far
         let cfgs = collect_config_paths(&start, &cfg());
         assert_eq!(cfgs.len(), 2, "{cfgs:?}");
         assert!(cfgs[0].ends_with("core/.pmpx.toml"));
@@ -378,7 +413,7 @@ mod tests {
 
         assert!(
             cfgs.iter().any(|p| p.ends_with("repo/.pmpx.toml")),
-            "项目根之上那一层的配置必须可见"
+            "the config one layer above the project root must be visible"
         );
     }
 
@@ -394,7 +429,7 @@ mod tests {
 
     #[test]
     fn walking_from_a_relative_path_works() {
-        // 相对路径要先接到 cwd 上，否则 `..` 会被消错
+        // A relative path must first be joined onto the cwd, otherwise `..` is removed wrongly
         let w = walk(Path::new("."), &cfg());
         assert!(w.dirs[0].is_absolute(), "{:?}", w.dirs[0]);
         assert_eq!(w.dirs[0], normalize(&std::env::current_dir().unwrap()));
