@@ -49,6 +49,27 @@ cargo install pmpx
 
 装出来的二进制叫 `pmpx`。
 
+每次发版还会附上预编译归档：Linux / Windows 的 x86_64，以及两种 macOS 架构。两种用法：
+
+```console
+# 安装脚本：下载本机对应的归档、按 release 里的 SHA256SUMS 校验、然后安装。
+# 只写一个文件，不碰 PATH，也不碰 shell 配置。
+$ curl -LsSf https://raw.githubusercontent.com/pmpx-rs/pmpx/main/install.sh | sh
+
+# 或者用 cargo-binstall
+$ cargo binstall pmpx
+```
+
+Windows 上用的是 `install.ps1`：
+
+```console
+$ irm https://raw.githubusercontent.com/pmpx-rs/pmpx/main/install.ps1 | iex
+```
+
+两者的默认落点分别是 `~/.local/bin`（Unix）与 `%USERPROFILE%\.pmpx\bin`（Windows），
+都读环境变量 `PMPX_INSTALL_DIR`、`PMPX_VERSION`、`PMPX_BASE_URL`（镜像）。没有归档的平台
+不算失败 —— 任何 Rust 能编译的地方，`cargo install pmpx` 都能装上。
+
 ### 环境要求
 
 - Rust **1.88+** 用于构建。
@@ -65,7 +86,8 @@ $ pmpx self update --version 0.1.0 # 或指定版本，这也是回滚的方式
 
 只有**不是 cargo 装的**安装才能自更新。`cargo install` 自己记着它放了什么到磁盘上，
 绕过它去替换文件会让 `cargo install --list` 与实际不符 —— 所以这类安装会被要求执行
-`cargo install pmpx --force`。
+`cargo install pmpx --force`。判断依据是**那本账**，不是目录：`cargo binstall` 装的、
+或者手工解压放进同一个目录的，都能自更新。
 
 替换之前会先拿 release 里的 `SHA256SUMS` 校验下载内容；不一致就停在那里，正在运行的
 二进制原样不动。但要清楚这**不是签名**：校验文件和压缩包来自同一个地方，它只能证明字节

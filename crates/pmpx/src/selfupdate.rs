@@ -65,7 +65,7 @@ pub fn run(request: &Request) -> crate::error::Result<u8> {
 
 fn run_validated(request: &Request, requested: Option<Version>) -> anyhow::Result<u8> {
     let exe = std::env::current_exe().context("cannot tell which binary is running")?;
-    let kind = install_kind(&exe, cargo_bin_dir().as_deref());
+    let kind = install_kind(&exe);
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .ok_or_else(|| anyhow!("the compiled-in version is not a version"))?;
 
@@ -377,35 +377,97 @@ fn append_to_name(path: &Path, suffix: &str) -> PathBuf {
 
 /// Whether this binary was put here by `cargo install`.
 ///
-/// Two signals, because either one alone has a hole: the cargo bin directory (which
-/// `CARGO_HOME` can move) and the `.crates.toml` cargo writes next to the binaries it
-/// manages.
-fn install_kind(exe: &Path, cargo_bin: Option<&Path>) -> InstallKind {
-    if let Some(bin) = cargo_bin {
-        if exe.parent() == Some(bin) {
-            return InstallKind::Cargo;
+/// The authority is **cargo's own record**, not the directory the binary happens to sit in.
+/// A `cargo binstall`, a hand-copied release archive and a symlink all land in the same
+/// `bin` directory as cargo's own installs, and those are exactly the installations that
+/// *should* be able to replace themselves. `cargo install` is the one that keeps a ledger,
+/// so the ledger is what decides.
+///
+/// cargo writes it beside the `bin` directory it installs into: `$CARGO_HOME` holds
+/// `.crates2.json` (and `.crates.toml`) with `bin/` next to them, and `cargo install --root
+/// DIR` does the same under `DIR`. So both the binary's own directory and the one above it
+/// are checked.
+fn install_kind(exe: &Path) -> InstallKind {
+    let Some(dir) = exe.parent() else {
+        return InstallKind::Standalone;
+    };
+
+    for candidate in [Some(dir), dir.parent()].into_iter().flatten() {
+        match cargo_record(candidate) {
+            // An unreadable ledger counts as cargo's: it cannot prove the binary is not
+            // cargo's, and guessing the other way would overwrite a managed install.
+            CargoRecord::ListsCrate | CargoRecord::Unreadable => return InstallKind::Cargo,
+            CargoRecord::Absent | CargoRecord::ListsSomethingElse => {}
         }
     }
 
-    let managed = exe
-        .parent()
-        .map(|dir| dir.join(".crates.toml").is_file())
-        .unwrap_or(false);
+    InstallKind::Standalone
+}
 
-    if managed {
-        InstallKind::Cargo
+/// What cargo's install record in a directory says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CargoRecord {
+    /// No `.crates2.json` and no `.crates.toml` there.
+    Absent,
+    /// A record that lists this crate.
+    ListsCrate,
+    /// A record that exists and lists other crates.
+    ListsSomethingElse,
+    /// A record that exists but cannot be read or parsed.
+    Unreadable,
+}
+
+fn cargo_record(dir: &Path) -> CargoRecord {
+    let mut found = false;
+
+    // What current cargo writes: {"installs": {"pmpx 0.1.0 (registry+...)": {...}}}.
+    if let Ok(text) = fs::read_to_string(dir.join(".crates2.json")) {
+        found = true;
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(json) => {
+                let lists = json
+                    .get("installs")
+                    .and_then(|value| value.as_object())
+                    .map(|installs| installs.keys().any(|key| names_this_crate(key)))
+                    .unwrap_or(false);
+                if lists {
+                    return CargoRecord::ListsCrate;
+                }
+            }
+            Err(_) => return CargoRecord::Unreadable,
+        }
+    }
+
+    // The older spelling of the same record.
+    if let Ok(text) = fs::read_to_string(dir.join(".crates.toml")) {
+        found = true;
+        match toml::from_str::<toml::Table>(&text) {
+            Ok(table) => {
+                let lists = table
+                    .get("v1")
+                    .and_then(|value| value.as_table())
+                    .map(|v1| v1.keys().any(|key| names_this_crate(key)))
+                    .unwrap_or(false);
+                if lists {
+                    return CargoRecord::ListsCrate;
+                }
+            }
+            Err(_) => return CargoRecord::Unreadable,
+        }
+    }
+
+    if found {
+        CargoRecord::ListsSomethingElse
     } else {
-        InstallKind::Standalone
+        CargoRecord::Absent
     }
 }
 
-/// `$CARGO_HOME/bin`, or `~/.cargo/bin` when that is not set.
-fn cargo_bin_dir() -> Option<PathBuf> {
-    let home = match std::env::var_os("CARGO_HOME") {
-        Some(dir) => PathBuf::from(dir),
-        None => directories::UserDirs::new()?.home_dir().join(".cargo"),
-    };
-    Some(home.join("bin"))
+/// A key in cargo's record reads `pmpx 0.1.0 (registry+https://...)`.
+fn names_this_crate(key: &str) -> bool {
+    key.split_once(' ')
+        .map(|(name, _)| name == env!("CARGO_PKG_NAME"))
+        .unwrap_or(false)
 }
 
 /// `(owner, repo)` of the releases, out of the manifest's repository URL.
@@ -779,39 +841,104 @@ b546e4e4c085b5f3699220f8f1dee442bd65d389f0930e376f37ac5effa99df0  pmpx-x86_64-un
 
     // ---- install kind -----------------------------------------------------
 
+    /// The record sits beside `bin/`, which is where `$CARGO_HOME` and
+    /// `cargo install --root DIR` both put it.
     #[test]
-    fn a_binary_in_the_cargo_bin_directory_is_a_cargo_install() {
+    fn the_record_beside_the_bin_directory_is_what_makes_it_cargos() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = tmp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let exe = bin.join(binary_name("linux"));
-
-        assert_eq!(install_kind(&exe, Some(&bin)), InstallKind::Cargo);
-    }
-
-    /// `CARGO_HOME` can point anywhere, and the record cargo writes is the second signal.
-    #[test]
-    fn a_crates_toml_next_to_the_binary_is_a_cargo_install() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join(".crates.toml"), "[v1]\n").unwrap();
-        let exe = tmp.path().join(binary_name("linux"));
+        std::fs::write(
+            tmp.path().join(".crates2.json"),
+            r#"{"installs":{"pmpx 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)":{"bins":["pmpx"]}}}"#,
+        )
+        .unwrap();
 
         assert_eq!(
-            install_kind(&exe, Some(Path::new("/elsewhere"))),
+            install_kind(&bin.join(binary_name("linux"))),
             InstallKind::Cargo
         );
     }
 
     #[test]
-    fn a_binary_somewhere_else_is_standalone() {
+    fn the_older_record_works_too() {
         let tmp = tempfile::tempdir().unwrap();
-        let exe = tmp.path().join(binary_name("linux"));
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(
+            tmp.path().join(".crates.toml"),
+            "[v1]\n\"pmpx 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)\" = [\"pmpx\"]\n",
+        )
+        .unwrap();
 
         assert_eq!(
-            install_kind(&exe, Some(Path::new("/elsewhere"))),
+            install_kind(&bin.join(binary_name("linux"))),
+            InstallKind::Cargo
+        );
+    }
+
+    /// A record *in* the binary's own directory counts as well -- that is where an install
+    /// with a custom layout can leave it.
+    #[test]
+    fn a_record_beside_the_binary_itself_counts() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".crates.toml"),
+            "[v1]\n\"pmpx 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)\" = [\"pmpx\"]\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            install_kind(&tmp.path().join(binary_name("linux"))),
+            InstallKind::Cargo
+        );
+    }
+
+    /// `cargo binstall` and a hand-copied release archive land in the same directory
+    /// without cargo knowing anything about them -- and those are exactly the
+    /// installations that should be able to replace themselves.
+    #[test]
+    fn another_crates_record_does_not_claim_this_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(
+            tmp.path().join(".crates2.json"),
+            r#"{"installs":{"cargo-bumpp 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)":{"bins":["bumpp"]}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            install_kind(&bin.join(binary_name("linux"))),
             InstallKind::Standalone
         );
-        assert_eq!(install_kind(&exe, None), InstallKind::Standalone);
+    }
+
+    /// An unreadable ledger cannot prove the binary is not cargo's, so it is treated as if
+    /// it were: overwriting a managed installation is the worse mistake.
+    #[test]
+    fn an_unreadable_record_is_treated_as_cargos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(tmp.path().join(".crates2.json"), "not json at all").unwrap();
+
+        assert_eq!(
+            install_kind(&bin.join(binary_name("linux"))),
+            InstallKind::Cargo
+        );
+    }
+
+    #[test]
+    fn no_record_at_all_is_standalone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+
+        assert_eq!(
+            install_kind(&bin.join(binary_name("linux"))),
+            InstallKind::Standalone
+        );
     }
 
     // ---- archives ---------------------------------------------------------

@@ -54,6 +54,30 @@ cargo install pmpx
 
 The binary is named `pmpx`.
 
+Every release also attaches prebuilt archives, for Linux and Windows on x86_64 and for both
+macOS architectures. Two ways to use them:
+
+```console
+# The install script downloads the archive for this machine, verifies it against the
+# release's SHA256SUMS, and installs it. One file is written; PATH and shell profiles
+# are left alone.
+$ curl -LsSf https://raw.githubusercontent.com/pmpx-rs/pmpx/main/install.sh | sh
+
+# Or, with cargo-binstall
+$ cargo binstall pmpx
+```
+
+On Windows the script is `install.ps1`:
+
+```console
+$ irm https://raw.githubusercontent.com/pmpx-rs/pmpx/main/install.ps1 | iex
+```
+
+Both install to `~/.local/bin` (Unix) or `%USERPROFILE%\.pmpx\bin` (Windows), and both take
+`PMPX_INSTALL_DIR`, `PMPX_VERSION` and `PMPX_BASE_URL` (a mirror) from the environment. A
+platform with no archive is not a failure — `cargo install pmpx` builds from source anywhere
+Rust does.
+
 ### Requirements
 
 - Rust **1.88+** to build.
@@ -71,7 +95,8 @@ $ pmpx self update --version 0.1.0 # or a specific one, which is also how you ro
 Only installations that cargo does not manage can do this. `cargo install` keeps its own
 record of what it put on disk, so a pmpx installed that way is told to run
 `cargo install pmpx --force` instead — replacing the file behind cargo's back would make
-`cargo install --list` disagree with reality.
+`cargo install --list` disagree with reality. The record is what decides, not the directory:
+a `cargo binstall` or a hand-unpacked archive sits in the same place and does update itself.
 
 The download is checked against the release's `SHA256SUMS` before anything is replaced; a
 mismatch stops there and leaves the running binary alone. That is **not a signature**: the

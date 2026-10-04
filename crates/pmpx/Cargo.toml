@@ -67,3 +67,11 @@ tempfile = "3"
 # Integration tests use `find_library` to find the cdylib in the artifact directory
 # according to platform rules.
 crate-plugin-kit.workspace = true
+
+# `cargo binstall` finds the release on its own -- `pmpx-{target}.{tar.gz,zip}` is one of
+# the names it tries by default -- but our archives put the binary at their root, while
+# binstall assumes it sits inside a directory named after the asset. So that is the one
+# thing it has to be told. Everything else is deliberately left at binstall's defaults:
+# the fewer templates, the fewer that can drift from `scripts/package-release.*`.
+[package.metadata.binstall]
+bin-dir = "{ bin }{ binary-ext }"
