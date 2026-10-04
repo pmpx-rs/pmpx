@@ -300,7 +300,7 @@ fn non_utf8_input_survives_the_boundary() {
 
     // 这个假插件不看 project_root，所以这里只证明"传得进去、不炸"；真正的无损往返在
     // abi 的单测里（read_os_keeps_arbitrary_bytes）。
-    let cmd = unsafe { out.assume_init() };
+    let mut cmd = unsafe { out.assume_init() };
     unsafe { (e.free_command)(&mut cmd as *mut _) };
 
     let os = std::ffi::OsStr::from_bytes(&raw);

@@ -15,7 +15,11 @@
 //! `.ps1` 交给 `pwsh -NoProfile -File`，解析不到就报错（退出码 3）并列出 PATH 里
 //! 名字相近的候选。
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
+// `OsString` 只在 Windows 侧用到（拼 cmd 命令行、以及那个真的跑 .cmd 的测试），
+// 非 Windows 上这个名字一次都不出现 —— 不加 cfg 就是 unused import，而 CI 是 -D warnings。
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -169,17 +173,31 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
         }
 
         ProgramKind::CmdShim => {
-            // ⚠️ 必须自己拼整条命令行，而且必须用 `raw_arg`。
-            //
-            // 不能逐个 arg 传：`cmd /c` 有自己的引号规则，会按条件剥掉整串的首尾引号，
-            // 所以要 `cmd /d /s /c "<path> <args>"` —— 外面那层留给 `/s` 剥。
-            // 也不能用 `arg` 传拼好的串：它会再套一层引号、把我们写好的 `"` 转义成
-            // `\"`，cmd 就认不出来了。这一段要的是逐字送达，`raw_arg` 就是为这个存在的。
-            use std::os::windows::process::CommandExt;
+            #[cfg(windows)]
+            {
+                // ⚠️ 必须自己拼整条命令行，而且必须用 `raw_arg`。
+                //
+                // 不能逐个 arg 传：`cmd /c` 有自己的引号规则，会按条件剥掉整串的首尾引号，
+                // 所以要 `cmd /d /s /c "<path> <args>"` —— 外面那层留给 `/s` 剥。
+                // 也不能用 `arg` 传拼好的串：它会再套一层引号、把我们写好的 `"` 转义成
+                // `\"`，cmd 就认不出来了。这一段要的是逐字送达，`raw_arg` 就是为这个存在的。
+                use std::os::windows::process::CommandExt;
 
-            let mut c = Command::new("cmd");
-            c.raw_arg(cmd_raw_command_line(&resolved.program, &spec.args));
-            c
+                let mut c = Command::new("cmd");
+                c.raw_arg(cmd_raw_command_line(&resolved.program, &spec.args));
+                c
+            }
+
+            #[cfg(not(windows))]
+            {
+                // `.cmd` / `.bat` 是 Windows 专有形态，这里没有 cmd.exe 可用。
+                // 但 `kind_of` 仍然会把它们分类成 CmdShim（分类是跨平台的），所以这个
+                // 分支得存在。真走到就按普通程序启动 —— 它会以 Exec format error 之类的
+                // 系统错误失败，那是实话。
+                let mut c = Command::new(&resolved.program);
+                c.args(&spec.args);
+                c
+            }
         }
 
         ProgramKind::PowerShellShim => {
@@ -222,22 +240,14 @@ fn build_cmd_line(program: &Path, args: &[OsString]) -> String {
     line
 }
 
-#[cfg(not(windows))]
-fn build_cmd_line(program: &Path, args: &[OsString]) -> String {
-    // 非 Windows 上走不到这里（不会有 .cmd），但函数得存在。
-    let mut line = program.to_string_lossy().into_owned();
-    for a in args {
-        line.push(' ');
-        line.push_str(&a.to_string_lossy());
-    }
-    line
-}
-
 /// 按 Windows 命令行（`CommandLineToArgvW`）的规则给一个参数加引号。
 ///
 /// 两条规则都很反直觉：`"` 在引号里要写成 `\"`；而**反斜杠只有在引号前面才有特殊
 /// 含义** —— 引号前 n 个反斜杠要写 `2n+1` 个，结尾的 n 个反斜杠要翻倍成 `2n`
 /// （否则会把收尾引号吃掉）。
+///
+/// 只在 Windows 上真正被调用；测试构建里也让它在，好让这套引号规则在三个平台都跑一遍。
+#[cfg(any(windows, test))]
 fn quote_arg(arg: &str) -> String {
     if !arg.is_empty() && !arg.contains([' ', '\t', '\n', '\x0b', '"']) {
         return arg.to_string();
