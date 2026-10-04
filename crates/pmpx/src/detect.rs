@@ -172,6 +172,13 @@ pub struct Selection {
     pub family: Family,
     /// The winning plugin's score (for `info`).
     pub score: u32,
+    /// The files matching the winning plugin, relative to the project root — exactly what is
+    /// handed to it as [`pmpx_plugin::Context::matched`].
+    ///
+    /// It is carried out of the resolution rather than recomputed by the caller so that **the
+    /// evidence that chose a plugin and the evidence the plugin is given are the same value**,
+    /// produced by the same scoring pass.
+    pub matched: Vec<String>,
     /// Notes shown to the user; `--quiet` turns them off.
     pub notes: Vec<String>,
 }
@@ -226,6 +233,12 @@ fn rank(order: &[String], name: &str) -> usize {
     order.iter().position(|x| x == name).unwrap_or(order.len())
 }
 
+/// The files that matched, in the order a plugin sees them: strong evidence first, then weak, each
+/// already sorted. This is [`Selection::matched`] and nothing else.
+fn matched_files(scored: &ScoredPlugin) -> Vec<String> {
+    scored.all_hits().map(str::to_string).collect()
+}
+
 /// The full resolution.
 ///
 /// `explicit` is the value of `-p/--plugin`: **it overrides everything, including `.pmpx.toml`** —
@@ -234,6 +247,33 @@ fn rank(order: &[String], name: &str) -> usize {
 pub fn select(
     set: &PluginSet,
     root: &Path,
+    merged: &MergedProjectConfig,
+    global: &GlobalConfig,
+    explicit: Option<&str>,
+) -> Result<Selection, DetectFailure> {
+    // Layer 0: `-p` names it directly, so the project does not need to be scored at all.
+    if explicit.is_some() {
+        return select_from_scores(set, root, &BTreeMap::new(), merged, global, explicit);
+    }
+
+    let families = score_all(set, root, merged);
+    select_from_scores(set, root, &families, merged, global, explicit)
+}
+
+/// The decision layer: pick a family, then a plugin inside it, from **scores that were already
+/// computed**.
+///
+/// Scoring is separated from deciding so that one run scores the project once: [`select`] does both
+/// in one call, while a caller that has already scored (`pmpx info`, `plugin current`) hands its
+/// own map in rather than walking the same files again.
+///
+/// `families` is only consulted when `explicit` is `None`, so a caller going straight to `-p` may
+/// pass an empty map. The `-p` path still scores **the one named plugin**, because
+/// [`Selection::matched`] has to be filled there too.
+pub fn select_from_scores(
+    set: &PluginSet,
+    root: &Path,
+    families: &BTreeMap<Family, FamilyScore>,
     merged: &MergedProjectConfig,
     global: &GlobalConfig,
     explicit: Option<&str>,
@@ -258,15 +298,14 @@ pub fn select(
             name: plugin.name.clone(),
             family,
             score: 0,
+            matched: matched_files(&ScoredPlugin::score(plugin, root)),
             // `-p` is what the user explicitly asked for; there is no ambiguity to flag
             notes: Vec::new(),
         });
     }
 
     // Layer 1: pick the family
-    let families = score_all(set, root, merged);
-
-    let mut candidates: Vec<FamilyScore> = families.into_values().filter(|f| f.score > 0).collect();
+    let mut candidates: Vec<&FamilyScore> = families.values().filter(|f| f.score > 0).collect();
 
     if candidates.is_empty() {
         return Err(DetectFailure::NothingDetected);
@@ -284,19 +323,16 @@ pub fn select(
             .then_with(|| a.family.as_str().cmp(b.family.as_str()))
     });
 
-    let winner = candidates.remove(0);
+    let winner = candidates[0];
     let mut notes = Vec::new();
 
     // A tie is reported — not because the result is uncertain, but because the user may want the
     // other one.
-    if candidates.first().is_some_and(|r| r.score == winner.score) {
-        let tied: Vec<&str> = std::iter::once(winner.family.as_str())
-            .chain(
-                candidates
-                    .iter()
-                    .filter(|c| c.score == winner.score)
-                    .map(|c| c.family.as_str()),
-            )
+    if candidates.get(1).is_some_and(|r| r.score == winner.score) {
+        let tied: Vec<&str> = candidates
+            .iter()
+            .filter(|c| c.score == winner.score)
+            .map(|c| c.family.as_str())
             .collect();
         notes.push(format!(
             "Multiple candidates detected ({} tied at {} points), selected {}",
@@ -315,8 +351,9 @@ pub fn select(
             return Ok(Selection {
                 crate_name: p.crate_name.clone(),
                 name: p.name.clone(),
-                family: winner.family,
+                family: winner.family.clone(),
                 score: p.score,
+                matched: matched_files(p),
                 notes,
             });
         }
@@ -378,8 +415,9 @@ pub fn select(
     Ok(Selection {
         crate_name: best.crate_name.clone(),
         name: best.name.clone(),
-        family: winner.family,
+        family: winner.family.clone(),
         score: best.score,
+        matched: matched_files(best),
         notes,
     })
 }
@@ -950,5 +988,26 @@ mod tests {
     fn selection_reports_the_winning_score() {
         let fx = fixture(&official(), &["package.json", "pnpm-lock.yaml"]);
         assert_eq!(pick(&fx, &[], None).score, 110);
+    }
+
+    /// The files handed to the plugin are the ones the scoring actually saw -- strong evidence
+    /// first, then weak. Nothing re-reads the directory afterwards.
+    #[test]
+    fn selection_carries_the_evidence_it_was_chosen_on() {
+        let fx = fixture(&official(), &["Cargo.toml", "Cargo.lock"]);
+        assert_eq!(
+            pick(&fx, &[], None).matched,
+            vec!["Cargo.lock", "Cargo.toml"]
+        );
+    }
+
+    /// The `-p` path skips family resolution but still reports that plugin's own evidence.
+    #[test]
+    fn an_explicit_plugin_carries_its_own_evidence() {
+        let fx = fixture(&official(), &["package.json", "pnpm-lock.yaml"]);
+        assert_eq!(
+            pick(&fx, &[], Some("pnpm")).matched,
+            vec!["pnpm-lock.yaml", "package.json"]
+        );
     }
 }

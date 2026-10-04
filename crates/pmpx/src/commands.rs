@@ -3,6 +3,7 @@
 //! This layer only does "read the context -> do the work -> print"; the decision logic lives
 //! in [`crate::app`] and below.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +16,8 @@ use crate::cli::{Cli, Command, ConfigCommand, PluginCommand};
 use crate::config::ProjectConfig;
 use crate::detect::{self, FamilyScore, ScoredPlugin};
 use crate::error::{PmpxError, EXIT_OK};
+use crate::plugins::InstalledPlugin;
+use crate::runtime::Backend;
 use crate::style;
 
 /// Dispatch by argv.
@@ -248,8 +251,9 @@ fn info(args: &Cli) -> crate::error::Result<u8> {
     }
     anstream::println!();
 
-    // The resolution result
-    match session.select(&root) {
+    // The resolution result. The scores below are the ones this command already computed, so the
+    // decision costs no further filesystem work.
+    match session.select_from(&root, &families) {
         Ok(selection) => {
             session.emit_notes(&selection);
             anstream::println!(
@@ -352,41 +356,35 @@ fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
         return Ok(EXIT_OK);
     }
 
-    let mut families: Vec<Option<Family>> = session
-        .plugins
-        .plugins
-        .iter()
-        .map(|p| p.family.clone())
-        .collect();
-    families.sort_by(|a, b| match (a, b) {
-        (Some(x), Some(y)) => x.as_str().cmp(y.as_str()),
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-    families.dedup();
+    // Group in one pass. `BTreeMap` supplies the family name order, and the bucket for plugins that
+    // declare no family is printed last rather than wherever `Option`'s ordering would put it.
+    let mut grouped: BTreeMap<Option<&Family>, Vec<&InstalledPlugin>> = BTreeMap::new();
+    for p in &session.plugins.plugins {
+        grouped.entry(p.family.as_ref()).or_default().push(p);
+    }
 
-    for family in families {
-        let title = family
-            .as_ref()
-            .map(Family::display)
-            .unwrap_or("(no family declared)");
-        anstream::println!("{}", style::paint(style::LABEL, title));
-        for p in session
-            .plugins
-            .plugins
-            .iter()
-            .filter(|p| p.family == family)
-        {
-            anstream::print!("  ");
-            print_plugin_row(p);
+    for (family, plugins) in &grouped {
+        if let Some(family) = family {
+            print_family_group(family.display(), plugins);
         }
+    }
+    if let Some(plugins) = grouped.get(&None) {
+        print_family_group("(no family declared)", plugins);
     }
 
     Ok(EXIT_OK)
 }
 
-fn print_plugin_row(p: &crate::plugins::InstalledPlugin) {
+/// One `plugin ls` section: a header and its rows, indented by one level.
+fn print_family_group(title: &str, plugins: &[&InstalledPlugin]) {
+    anstream::println!("{}", style::paint(style::LABEL, title));
+    for p in plugins {
+        anstream::print!("  ");
+        print_plugin_row(p);
+    }
+}
+
+fn print_plugin_row(p: &InstalledPlugin) {
     match p.problem() {
         None => anstream::println!(
             "{} v{} {:<28} {}",
@@ -416,7 +414,7 @@ fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
         return Ok(EXIT_OK);
     }
 
-    let selection = session.select(&root).ok();
+    let selection = session.select_from(&root, &families).ok();
 
     for (family, fs) in &families {
         let current = selection
@@ -477,7 +475,10 @@ fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
     };
 
     let path = target_config_path(&session);
-    edit_project_config(&path, |cfg| {
+    let current = ProjectConfig::load_from(&path)
+        .map_err(PmpxError::Other)?
+        .unwrap_or_default();
+    edit_project_config(&path, current, |cfg| {
         cfg.plugin
             .insert(family.as_str().to_string(), plugin.name.clone());
     })
@@ -509,7 +510,7 @@ fn plugin_unset(args: &Cli, family: Option<&str>, yes: bool) -> crate::error::Re
                     path.display()
                 )));
             }
-            edit_project_config(&path, |cfg| {
+            edit_project_config(&path, existing, |cfg| {
                 cfg.plugin.remove(f);
             })
             .map_err(PmpxError::Other)?;
@@ -542,7 +543,7 @@ fn plugin_unset(args: &Cli, family: Option<&str>, yes: bool) -> crate::error::Re
             }
 
             let removed: Vec<String> = existing.plugin.keys().cloned().collect();
-            edit_project_config(&path, |cfg| {
+            edit_project_config(&path, existing, |cfg| {
                 cfg.plugin.clear();
             })
             .map_err(PmpxError::Other)?;
@@ -578,8 +579,15 @@ fn target_config_path(session: &Session) -> PathBuf {
 }
 
 /// Read-modify-write one `.pmpx.toml`, keeping keys it does not recognise.
-fn edit_project_config(path: &Path, edit: impl FnOnce(&mut ProjectConfig)) -> Result<()> {
-    let mut cfg = ProjectConfig::load_from(path)?.unwrap_or_default();
+///
+/// `current` is the content the caller already read: passing it in keeps "what was inspected" and
+/// "what is edited" the same document, and saves parsing the same file twice.
+fn edit_project_config(
+    path: &Path,
+    current: ProjectConfig,
+    edit: impl FnOnce(&mut ProjectConfig),
+) -> Result<()> {
+    let mut cfg = current;
     edit(&mut cfg);
 
     // Do not leave an empty file behind for an empty config
@@ -609,10 +617,7 @@ fn plugin_add(args: &Cli, names: &[String], version: Option<&str>) -> crate::err
 
     for name in names {
         anstream::println!("Installing {}...", style::paint(style::PM, name));
-        let installed = session
-            .kit
-            .install(name, version)
-            .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
+        let installed = session.kit.install(name, version)?;
 
         anstream::println!(
             "  {} v{} ({}) -> {}",
@@ -631,10 +636,7 @@ fn plugin_rm(args: &Cli, names: &[String]) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
     for name in names {
-        session
-            .kit
-            .uninstall(name)
-            .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
+        session.kit.uninstall(name)?;
         anstream::println!("Removed {}", style::paint(style::PM, name));
     }
 
@@ -664,10 +666,7 @@ fn plugin_update(args: &Cli, names: &[String], version: Option<&str>) -> crate::
     }
 
     for name in targets {
-        let installed = session
-            .kit
-            .update(&name, version)
-            .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
+        let installed = session.kit.update(&name, version)?;
         anstream::println!(
             "{} -> v{}",
             installed.crate_name,
@@ -685,10 +684,7 @@ fn plugin_search(args: &Cli, keyword: &str, limit: usize) -> crate::error::Resul
     // The user types the short name (`cargo`) while crates.io has `pmpx-plugin-cargo`. Search
     // the short name directly: crates.io search is full text, so the `pmpx-plugin-` prefix is
     // not a keyword.
-    let results = session
-        .kit
-        .search(keyword, limit)
-        .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
+    let results = session.kit.search(keyword, limit)?;
 
     if results.is_empty() {
         anstream::println!("crates.io has no crate matching {keyword:?}.");
@@ -765,13 +761,9 @@ fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
         }
         anstream::println!();
 
-        if let Ok(backend) = session.load_backend(&crate::detect::Selection {
-            crate_name: p.crate_name.clone(),
-            name: p.name.clone(),
-            family: p.family.clone().unwrap_or_else(|| Family::new("unknown")),
-            score: 0,
-            notes: Vec::new(),
-        }) {
+        // The plugin record we already have is enough to load it -- no need to dress it up as a
+        // detection result.
+        if let Ok(backend) = Backend::load(&session.kit, p) {
             let d = backend.diagnostics();
             anstream::println!("Plugin reports");
             anstream::println!(
@@ -883,7 +875,10 @@ fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
 
         ConfigCommand::Set { key, value } => {
             let mut doc = read_toml_table(&path).map_err(PmpxError::Other)?;
-            insert_dotted(&mut doc, key, parse_value(value))
+            // Parse once: what gets printed has to be the value that was stored, and a second
+            // independent parse is one more chance for the two to differ.
+            let parsed = parse_value(value);
+            insert_dotted(&mut doc, key, parsed.clone())
                 .map_err(|e| PmpxError::Usage(e.to_string()))?;
 
             if let Some(parent) = path.parent() {
@@ -894,7 +889,7 @@ fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
 
             anstream::println!(
                 "Wrote {key} = {} to {}",
-                render_value(&parse_value(value)),
+                render_value(&parsed),
                 style::paint(style::DIM, path.display())
             );
             Ok(EXIT_OK)

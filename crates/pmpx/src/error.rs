@@ -71,3 +71,15 @@ impl PmpxError {
         PmpxError::NotFound(message.into())
     }
 }
+
+/// A failure reported by the plugin store (installing, removing, reading a manifest, a crates.io
+/// query) lands in [`PmpxError::Other`] — but as a **wrapped error**, not as a formatted string.
+///
+/// `KitError` carries `#[source]` detail (`ManifestParse` on a broken manifest, `PluginInUse` on a
+/// library still loaded, and so on); turning it into text at the boundary would throw that away for
+/// every later reader. The message shown to the user is unchanged either way.
+impl From<crate_plugin_kit::KitError> for PmpxError {
+    fn from(e: crate_plugin_kit::KitError) -> Self {
+        PmpxError::Other(anyhow::Error::new(e))
+    }
+}

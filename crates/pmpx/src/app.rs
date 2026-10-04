@@ -1,17 +1,18 @@
 //! Wires the layers together: the context of one run, and the whole flow from argv to
 //! "run one command".
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use crate_plugin_kit::{CratePluginKit, KitConfig};
 use pmpx_plugin::abi::PmpxPluginV1;
-use pmpx_plugin::Verb;
+use pmpx_plugin::{Family, Verb};
 
 use crate::cli::Cli;
 use crate::config::{GlobalConfig, MergedProjectConfig};
-use crate::detect::{self, DetectFailure, ScoredPlugin, Selection};
+use crate::detect::{self, DetectFailure, FamilyScore, Selection};
 use crate::discovery::{self, StopReason, Walk};
 use crate::error::PmpxError;
 use crate::plugins::PluginSet;
@@ -78,13 +79,14 @@ impl Session {
 
         let plugins = PluginSet::load(&kit)?;
 
-        let project_root =
-            discovery::find_project_root(&start_dir, &discovery_cfg, |d| plugins.marks_root(d));
-        let config_paths = discovery::collect_config_paths(&start_dir, &discovery_cfg);
-        let project = MergedProjectConfig::from_paths_near_to_far(&config_paths)?;
-
-        // Walk-up path and stop reason -- used by `info` and by "why was nothing found"
+        // Walk up **once**. The path and the stop reason, the project root, and the config layers
+        // are three views of the same traversal, so they are derived here instead of walking
+        // again -- that also makes it impossible for them to disagree about where the walk stopped.
         let walk = discovery::walk(&start_dir, &discovery_cfg);
+
+        let project_root = walk.project_root(|d| plugins.marks_root(d));
+        let config_paths = walk.config_paths();
+        let project = MergedProjectConfig::from_paths_near_to_far(&config_paths)?;
 
         Ok(Self {
             start_dir,
@@ -161,6 +163,23 @@ impl Session {
         )
     }
 
+    /// Resolve from scores the caller already computed ([`detect::score_all`]), instead of scoring
+    /// the project a second time in the same run.
+    pub fn select_from(
+        &self,
+        root: &Path,
+        families: &BTreeMap<Family, FamilyScore>,
+    ) -> std::result::Result<Selection, DetectFailure> {
+        detect::select_from_scores(
+            &self.plugins,
+            root,
+            families,
+            &self.project,
+            &self.global,
+            self.wanted_plugin.as_deref(),
+        )
+    }
+
     /// Print the notes from the resolution. `--quiet` turns them off.
     pub fn emit_notes(&self, selection: &Selection) {
         if self.quiet {
@@ -182,20 +201,6 @@ impl Session {
                 )
             );
         }
-    }
-
-    /// The files the selected plugin declares, matched in the project root -- exactly what
-    /// is passed as `Context::matched`.
-    ///
-    /// Relative to `project_root`, sorted and deduplicated.
-    pub fn matched_for(&self, root: &Path, selection: &Selection) -> Vec<String> {
-        let Some(plugin) = self.plugins.by_crate_name(&selection.crate_name) else {
-            return Vec::new();
-        };
-        ScoredPlugin::score(plugin, root)
-            .all_hits()
-            .map(str::to_string)
-            .collect()
     }
 
     /// Load the selected plugin.
@@ -273,13 +278,15 @@ pub fn run_verb(
     session.emit_notes(&selection);
 
     let backend = session.load_backend(&selection)?;
-    let matched = session.matched_for(&root, &selection);
 
-    match backend.command(&root, &matched, verb, args) {
+    // The evidence the plugin is given is the evidence that selected it -- carried by the
+    // resolution itself, not re-read from the filesystem here.
+    match backend.command(&root, &selection.matched, verb, args) {
         Ok(Ok(spec)) => {
-            let cwd = spec.cwd.clone().unwrap_or_else(|| root.clone());
             announce(session.quiet, &spec);
-            spawn::run(&spec, &cwd)
+            // A `cwd` the plugin set is applied inside `spawn`, so passing the project root here is
+            // the fallback, not a decision this layer has to make.
+            spawn::run(&spec, &root)
         }
 
         Ok(Err(BackendError::UnsupportedVerb)) if allow_exec_fallback => {

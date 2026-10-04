@@ -1,8 +1,9 @@
 //! Project root discovery.
 //!
-//! Two entry points share one walk up: `find_project_root` answers "where do I run" (only the
-//! nearest match), and `collect_config_paths` answers "which rules apply" (every `.pmpx.toml` along
-//! the way). The stop conditions are identical; the results are two different things.
+//! One walk up answers two questions: [`Walk::project_root`] answers "where do I run" (only the
+//! nearest match), and [`Walk::config_paths`] answers "which rules apply" (every `.pmpx.toml` along
+//! the way). The stop conditions are identical; the results are two different things, which is why
+//! the caller walks once and asks [`Walk`] both.
 //!
 //! ```text
 //! ~/repo/.git
@@ -10,8 +11,8 @@
 //! ~/repo/crates/core/.pmpx.toml [plugin] node = "pnpm"
 //! cwd = ~/repo/crates/core/src/
 //!
-//! find_project_root    → ~/repo/crates/core
-//! collect_config_paths → [core/.pmpx.toml, repo/.pmpx.toml]  (both are read)
+//! Walk::project_root  → ~/repo/crates/core
+//! Walk::config_paths  → [core/.pmpx.toml, repo/.pmpx.toml]  (both are read)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -114,30 +115,31 @@ pub fn walk(start: &Path, cfg: &DiscoveryConfig) -> Walk {
     Walk { dirs, stopped }
 }
 
-/// Find the project root.
+/// The two questions one walk up can answer.
 ///
-/// `is_root` comes from the caller, usually "this directory has a `.pmpx.toml`, or has one of the
-/// detect files declared by an installed plugin". It is a parameter so that this module does not
-/// need to know about plugins.
-pub fn find_project_root(
-    start: &Path,
-    cfg: &DiscoveryConfig,
-    is_root: impl Fn(&Path) -> bool,
-) -> Option<PathBuf> {
-    walk(start, cfg).dirs.into_iter().find(|d| is_root(d))
-}
+/// Both read the same candidate list, so a caller that needs both walks once and asks twice; the
+/// stop conditions cannot drift apart because there is only one traversal.
+impl Walk {
+    /// The project root: the nearest walked directory `is_root` accepts.
+    ///
+    /// `is_root` comes from the caller, usually "this directory has a `.pmpx.toml`, or has one of
+    /// the detect files declared by an installed plugin". It is a parameter so that this module
+    /// does not need to know about plugins.
+    pub fn project_root(&self, is_root: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+        self.dirs.iter().find(|d| is_root(d)).cloned()
+    }
 
-/// Collect every `.pmpx.toml`, **near to far**.
-///
-/// The stop conditions match [`find_project_root`]; this order is the "nearest wins" merge rule of
-/// [`crate::config::MergedProjectConfig`].
-pub fn collect_config_paths(start: &Path, cfg: &DiscoveryConfig) -> Vec<PathBuf> {
-    walk(start, cfg)
-        .dirs
-        .into_iter()
-        .map(|d| d.join(".pmpx.toml"))
-        .filter(|p| p.is_file())
-        .collect()
+    /// Collect every `.pmpx.toml` on this walk, **near to far**.
+    ///
+    /// The stop conditions match [`Walk::project_root`]; this order is the "nearest wins" merge rule
+    /// of [`crate::config::MergedProjectConfig`].
+    pub fn config_paths(&self) -> Vec<PathBuf> {
+        self.dirs
+            .iter()
+            .map(|d| d.join(".pmpx.toml"))
+            .filter(|p| p.is_file())
+            .collect()
+    }
 }
 
 /// Normalize a directory into a directly comparable form.
@@ -352,15 +354,14 @@ mod tests {
     }
 
     #[test]
-    fn find_project_root_picks_the_nearest_hit() {
+    fn the_project_root_is_the_nearest_hit() {
         let tmp = tree(&["repo/web/src"]);
         touch(&tmp.path().join("repo/Cargo.toml"));
         touch(&tmp.path().join("repo/web/package.json"));
 
-        let root = find_project_root(&tmp.path().join("repo/web/src"), &cfg(), |d| {
-            d.join("Cargo.toml").exists() || d.join("package.json").exists()
-        })
-        .unwrap();
+        let root = walk(&tmp.path().join("repo/web/src"), &cfg())
+            .project_root(|d| d.join("Cargo.toml").exists() || d.join("package.json").exists())
+            .unwrap();
 
         assert!(
             root.ends_with("web"),
@@ -369,13 +370,12 @@ mod tests {
     }
 
     #[test]
-    fn find_project_root_returns_none_when_nothing_matches() {
+    fn no_root_is_found_when_nothing_matches() {
         let tmp = tree(&["repo/some/dir"]);
         std::fs::create_dir_all(tmp.path().join("repo/.git")).unwrap();
 
-        let root = find_project_root(&tmp.path().join("repo/some/dir"), &cfg(), |d| {
-            d.join("Cargo.toml").exists()
-        });
+        let root = walk(&tmp.path().join("repo/some/dir"), &cfg())
+            .project_root(|d| d.join("Cargo.toml").exists());
         assert!(root.is_none());
     }
 
@@ -384,10 +384,9 @@ mod tests {
         let tmp = tree(&["proj"]);
         touch(&tmp.path().join("proj/Cargo.toml"));
 
-        let root = find_project_root(&tmp.path().join("proj"), &cfg(), |d| {
-            d.join("Cargo.toml").exists()
-        })
-        .unwrap();
+        let root = walk(&tmp.path().join("proj"), &cfg())
+            .project_root(|d| d.join("Cargo.toml").exists())
+            .unwrap();
         assert_eq!(root, normalize(&tmp.path().join("proj")));
     }
 
@@ -401,12 +400,13 @@ mod tests {
         touch(&tmp.path().join("repo/crates/core/Cargo.toml"));
 
         let start = tmp.path().join("repo/crates/core/src");
+        let w = walk(&start, &cfg());
 
-        let root = find_project_root(&start, &cfg(), |d| d.join("Cargo.toml").exists()).unwrap();
+        let root = w.project_root(|d| d.join("Cargo.toml").exists()).unwrap();
         assert!(root.ends_with("core"));
 
         // Both must be visible, near to far
-        let cfgs = collect_config_paths(&start, &cfg());
+        let cfgs = w.config_paths();
         assert_eq!(cfgs.len(), 2, "{cfgs:?}");
         assert!(cfgs[0].ends_with("core/.pmpx.toml"));
         assert!(cfgs[1].ends_with("repo/.pmpx.toml"));
@@ -422,9 +422,33 @@ mod tests {
         let tmp = tree(&["repo/a/b/c"]);
         touch(&tmp.path().join("repo/.pmpx.toml"));
 
-        let cfgs = collect_config_paths(&tmp.path().join("repo/a/b/c"), &cfg());
+        let cfgs = walk(&tmp.path().join("repo/a/b/c"), &cfg()).config_paths();
         assert_eq!(cfgs.len(), 1);
         assert!(cfgs[0].ends_with("repo/.pmpx.toml"));
+    }
+
+    /// Both answers must be available from **one** traversal: that is what `Session::open` relies
+    /// on, and the reason `Walk` carries the two methods at all.
+    #[test]
+    fn one_walk_answers_both_questions() {
+        let tmp = tree(&["repo/crates/core/src"]);
+        std::fs::create_dir_all(tmp.path().join("repo/.git")).unwrap();
+        touch(&tmp.path().join("repo/.pmpx.toml"));
+        touch(&tmp.path().join("repo/crates/core/.pmpx.toml"));
+        touch(&tmp.path().join("repo/crates/core/Cargo.toml"));
+
+        let start = tmp.path().join("repo/crates/core/src");
+        let w = walk(&start, &cfg());
+
+        let root = w
+            .project_root(|d| d.join("Cargo.toml").exists())
+            .expect("the core crate should be the project root");
+        assert!(root.ends_with("core"), "{root:?}");
+
+        let cfgs = w.config_paths();
+        assert_eq!(cfgs.len(), 2, "{cfgs:?}");
+        assert!(cfgs[0].ends_with("core/.pmpx.toml"));
+        assert!(cfgs[1].ends_with("repo/.pmpx.toml"));
     }
 
     #[test]

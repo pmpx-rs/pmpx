@@ -45,12 +45,20 @@ pub struct Hint {
 
 /// Look for clues in `dir`; only this level is looked at, no recursion.
 pub fn probe(dir: &Path) -> Vec<Hint> {
+    // The directory is listed **once** for the whole probe: one listing per `*.ext` pattern would
+    // read the same directory again for every wildcard (`*.csproj`, `*.fsproj`, `*.sln`).
+    let entries: Option<Vec<String>> = std::fs::read_dir(dir).ok().map(|list| {
+        list.filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect()
+    });
+
     let mut out = Vec::new();
 
     for (family, patterns) in ECOSYSTEM_HINTS {
         let matched: Vec<String> = patterns
             .iter()
-            .filter(|p| hits(dir, p))
+            .filter(|p| hits(dir, entries.as_deref(), p))
             .map(|p| (*p).to_string())
             .collect();
 
@@ -63,17 +71,18 @@ pub fn probe(dir: &Path) -> Vec<Hint> {
 }
 
 /// Whether one declaration matched in `dir`.
-fn hits(dir: &Path, pattern: &str) -> bool {
+///
+/// `entries` is the listing from [`probe`], or `None` when the directory could not be read: a
+/// `*.ext` pattern then cannot match, while the plain-name form still goes through `exists()`.
+fn hits(dir: &Path, entries: Option<&[String]>, pattern: &str) -> bool {
     match pattern.strip_prefix("*.") {
         Some(ext) => {
             let suffix = format!(".{ext}");
-            std::fs::read_dir(dir)
-                .map(|entries| {
-                    entries.filter_map(Result::ok).any(|e| {
-                        let name = e.file_name();
-                        let name = name.to_string_lossy();
-                        name.len() > suffix.len() && name.ends_with(&suffix)
-                    })
+            entries
+                .map(|names| {
+                    names
+                        .iter()
+                        .any(|name| name.len() > suffix.len() && name.ends_with(&suffix))
                 })
                 .unwrap_or(false)
         }
@@ -156,6 +165,14 @@ mod tests {
 
         let hints = probe(tmp.path());
         assert_eq!(hints[0].matched, vec!["*.fsproj"]);
+    }
+
+    /// The one directory listing the probe takes may come back empty (the directory is gone, or
+    /// unreadable); a wildcard pattern then simply cannot match, and nothing panics.
+    #[test]
+    fn a_directory_that_cannot_be_listed_matches_no_wildcard() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(probe(&tmp.path().join("nope")).is_empty());
     }
 
     #[test]

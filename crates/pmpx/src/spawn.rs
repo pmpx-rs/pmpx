@@ -170,8 +170,13 @@ fn near_misses(wanted_lower: &str) -> Vec<PathBuf> {
 ///
 /// This step is split out for testability: tests need `output()` to capture output, while
 /// [`run`] inherits stdio.
+///
+/// `cwd` is only the fallback: a working directory the plugin put in the spec **wins**, and it is
+/// resolved here rather than by every caller, so a plugin's `cwd` cannot silently depend on the
+/// caller remembering to apply it.
 pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
     let resolved = resolve(&spec.program)?;
+    let cwd = spec.cwd.as_deref().unwrap_or(cwd);
 
     let mut cmd = match resolved.kind {
         ProgramKind::Native => {
@@ -328,6 +333,8 @@ pub fn announce(spec: &CommandSpec) {
 }
 
 /// Really run it: inherit stdio, wait for it to finish, return its exit code verbatim.
+///
+/// `cwd` is the fallback for a spec that names no directory of its own -- see [`command_for`].
 ///
 /// The return value is not `Result<()>`: "the tests failed" and "pmpx failed" are two
 /// different things, and `pmpx test` must be able to pass the backend's nonzero exit code
@@ -639,6 +646,29 @@ mod tests {
         let spec = CommandSpec::new("pmpx-definitely-not-a-real-program-xyz");
 
         assert!(command_for(&spec, tmp.path()).is_err());
+    }
+
+    /// A `cwd` the plugin asked for has to win over the caller's directory, wherever the caller
+    /// happens to be looking from.
+    #[test]
+    fn a_cwd_in_the_spec_overrides_the_callers_directory() {
+        let outer = tempfile::tempdir().unwrap();
+        let inner = tempfile::tempdir().unwrap();
+
+        let spec = CommandSpec::new("cargo").arg("--version").cwd(inner.path());
+        let cmd = command_for(&spec, outer.path()).unwrap();
+
+        assert_eq!(cmd.get_current_dir(), Some(inner.path()));
+    }
+
+    /// Without one, the caller's directory is what is used.
+    #[test]
+    fn without_a_cwd_in_the_spec_the_callers_directory_is_used() {
+        let outer = tempfile::tempdir().unwrap();
+        let spec = CommandSpec::new("cargo").arg("--version");
+
+        let cmd = command_for(&spec, outer.path()).unwrap();
+        assert_eq!(cmd.get_current_dir(), Some(outer.path()));
     }
 
     /// On Windows `.cmd` must be wrapped in `cmd /d /s /c`, with one quote pair at each end

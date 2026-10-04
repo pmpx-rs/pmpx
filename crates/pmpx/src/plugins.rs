@@ -80,6 +80,13 @@ impl InstalledPlugin {
 pub struct PluginSet {
     /// Sorted by crate name to keep output stable.
     pub plugins: Vec<InstalledPlugin>,
+
+    /// Every detect file name declared by a usable plugin, deduplicated and sorted.
+    ///
+    /// Derived from `plugins` and then frozen: it is read once per walked directory (see
+    /// [`PluginSet::marks_root`]), and rebuilding it there would re-collect and re-sort the same
+    /// names for every step of the walk.
+    detect_names: Vec<String>,
 }
 
 impl PluginSet {
@@ -93,7 +100,19 @@ impl PluginSet {
         }
         plugins.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
 
-        Ok(Self { plugins })
+        let mut detect_names: Vec<String> = plugins
+            .iter()
+            .filter(|p| p.is_usable())
+            .flat_map(|p| p.detect_names())
+            .map(str::to_string)
+            .collect();
+        detect_names.sort_unstable();
+        detect_names.dedup();
+
+        Ok(Self {
+            plugins,
+            detect_names,
+        })
     }
 
     /// Those that take part in resolution.
@@ -111,16 +130,13 @@ impl PluginSet {
         self.plugins.iter().find(|p| p.crate_name == crate_name)
     }
 
-    /// Every detect file name declared by any plugin, deduplicated.
+    /// Every detect file name declared by any plugin, deduplicated and sorted.
     ///
     /// A directory containing any one of them looks like a project root. strong / weak is not
     /// distinguished here — the project root is a structural judgement, and `package.json` and
     /// `pnpm-lock.yaml` are equally valid for it.
-    pub fn detect_names(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.usable().flat_map(|p| p.detect_names()).collect();
-        names.sort_unstable();
-        names.dedup();
-        names
+    pub fn detect_names(&self) -> &[String] {
+        &self.detect_names
     }
 
     /// Whether this directory looks like a project root.
@@ -275,15 +291,17 @@ weak   = ["Cargo.toml"]
         let (_t, kit, _) = store(&[("pmpx-plugin-pnpm", PNPM), ("pmpx-plugin-cargo", CARGO)]);
         let set = PluginSet::load(&kit).unwrap();
 
-        let mut names = set.detect_names();
-        let before = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), before, "duplicates: {names:?}");
+        let names = set.detect_names();
+        // The list is a frozen, sorted, deduplicated set -- it is read once per walked directory,
+        // so it must not need cleaning up at the call site.
+        assert!(
+            names.windows(2).all(|w| w[0] < w[1]),
+            "sorted and without duplicates: {names:?}"
+        );
 
-        assert!(names.contains(&"Cargo.toml"));
-        assert!(names.contains(&"pnpm-lock.yaml"));
-        assert!(!names.contains(&"package.json.lock"));
+        assert!(names.contains(&"Cargo.toml".to_string()));
+        assert!(names.contains(&"pnpm-lock.yaml".to_string()));
+        assert!(!names.contains(&"package.json.lock".to_string()));
     }
 
     #[test]
