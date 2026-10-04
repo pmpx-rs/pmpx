@@ -61,6 +61,18 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --locked
 
+      # The release scripts are what a tag runs. A syntax error in one of them would first
+      # show up while publishing, which is the worst moment to find it -- so both are
+      # parsed here. Both shells exist on the Linux runner, so one step covers both.
+      - name: The release scripts parse
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/package-release.sh
+          pwsh -NoProfile -Command '$null = [scriptblock]::Create((Get-Content -Raw scripts/package-release.ps1))'
+          echo "both packaging scripts parse"
+
       # `pmpx-plugin` promises **zero dependencies**. This is its most important promise
       # to this ecosystem: one more dependency for it is one more for every plugin author;
       # raise its MSRV once and fewer people can write plugins.

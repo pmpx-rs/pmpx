@@ -1,5 +1,9 @@
 /target
 
+# `scripts/package-release.*` writes the release archives here; CI uploads them straight
+# from the runner, so nothing in here is ever committed.
+/dist
+
 # Dev-only local overrides. `[patch.crates-io]` here points at sibling checkouts **outside this
 # repository**, and cargo treats a patch aimed at a missing path as a **hard error** -- so
 # committing this file would break every lone clone and every CI run. It must stay ignored.

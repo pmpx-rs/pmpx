@@ -6,13 +6,19 @@ name: Release
 # counts as done, not as an error.
 #
 # The checks live in ci.yaml and are called from here, so the order is structural (a
-# `needs` within the same run) rather than something lined up by timing two workflows.
+# `needs` within the same run) rather than something lined up by timing two workflows. The
+# release archives are delegated the same way, to assets.yaml.
+#
+# One tag produces both halves of a release: the crates.io publish, and the archives that
+# `pmpx self update` and the install script consume. They share the same gate (`checks`)
+# but not each other -- the note on the assets job says why.
 
 on:
   push:
     # The only trigger. Nothing else can start a run, so nothing else can touch the registry.
     tags: [ "v*.*.*" ]
 
+# Read-only by default; the job that attaches files to the release asks for more.
 permissions:
   contents: read
 
@@ -64,3 +70,25 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo harbor publish
+
+  # ---------------------------------------------------------------------------
+  # The release archives and `SHA256SUMS` -- see assets.yaml, which owns that pipeline.
+  #
+  # Called from here rather than triggered by its own `on: push: tags`, so it cannot run
+  # before `checks` has passed: "an artifact never lands on a tag whose checks failed" is
+  # then structural, not a matter of which workflow happened to start first.
+  #
+  # Unlike the crates.io publish it does **not** wait for the registry: nothing in the
+  # download path needs it, and a registry outage should not stop a binary release. Both
+  # halves are gated on `checks`, which is the real gate.
+  #
+  # assets.yaml also takes `workflow_dispatch`, so the four runners -- which only exist on
+  # GitHub -- can be exercised against an existing tag instead of at the next release.
+  # ---------------------------------------------------------------------------
+  assets:
+    name: Archives
+    needs: [ checks ]
+    uses: ./.github/workflows/assets.yaml
+    permissions:
+      # The called workflow can only narrow this; it needs to write to the release.
+      contents: write
