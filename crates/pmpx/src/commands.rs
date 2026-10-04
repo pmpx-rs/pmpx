@@ -15,6 +15,7 @@ use crate::cli::{Cli, Command, ConfigCommand, PluginCommand};
 use crate::config::ProjectConfig;
 use crate::detect::{self, FamilyScore, ScoredPlugin};
 use crate::error::{PmpxError, EXIT_OK};
+use crate::style;
 
 /// Dispatch by argv.
 pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
@@ -85,14 +86,30 @@ fn show_detection(args: &Cli) -> crate::error::Result<u8> {
 
     session.emit_notes(&selection);
 
-    println!("{:<12}  {}", "Project root", root.display());
-    println!("{:<12}  {}", "Family", selection.family.display());
-    println!(
-        "{:<12}  {} (score {})",
-        "Plugin", selection.name, selection.score
+    anstream::println!(
+        "{}  {}",
+        style::label(12, "Project root"),
+        style::paint(style::DIM, root.display())
     );
-    println!();
-    println!("Use `pmpx info` to see every candidate and score.");
+    anstream::println!(
+        "{}  {}",
+        style::label(12, "Family"),
+        selection.family.display()
+    );
+    anstream::println!(
+        "{}  {} (score {})",
+        style::label(12, "Plugin"),
+        style::paint(style::PM, &selection.name),
+        selection.score
+    );
+    anstream::println!();
+    anstream::println!(
+        "{}",
+        style::paint(
+            style::DIM,
+            "Use `pmpx info` to see every candidate and score."
+        )
+    );
 
     Ok(EXIT_OK)
 }
@@ -108,14 +125,22 @@ fn show_detection(args: &Cli) -> crate::error::Result<u8> {
 fn info(args: &Cli) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
-    println!("{:<12}  {}", "Start", session.start_dir.display());
+    anstream::println!(
+        "{}  {}",
+        style::label(12, "Start"),
+        style::paint(style::DIM, session.start_dir.display())
+    );
     match session.project_root() {
-        Some(root) => println!("{:<12}  {}", "Project root", root.display()),
-        None => println!("{:<12}  (not found)", "Project root"),
+        Some(root) => anstream::println!(
+            "{}  {}",
+            style::label(12, "Project root"),
+            style::paint(style::DIM, root.display())
+        ),
+        None => anstream::println!("{}  (not found)", style::label(12, "Project root")),
     }
-    println!(
-        "{:<12}  {}, stopped because: {}",
-        "Walk-up",
+    anstream::println!(
+        "{}  {}, stopped because: {}",
+        style::label(12, "Walk-up"),
         crate::discovery::dirs(session.walk.dirs.len()),
         session
             .walk
@@ -124,56 +149,73 @@ fn info(args: &Cli) -> crate::error::Result<u8> {
     );
 
     if session.project.sources.is_empty() {
-        println!("{:<12}  (none)", "Project config");
+        anstream::println!("{}  (none)", style::label(12, "Project config"));
     } else {
-        println!("{:<12}  (nearest first, nearest wins)", "Project config");
+        anstream::println!(
+            "{}  (nearest first, nearest wins)",
+            style::label(12, "Project config")
+        );
         for p in &session.project.sources {
-            println!("              {}", p.display());
+            anstream::println!("              {}", style::paint(style::DIM, p.display()));
         }
     }
     for (family, plugin) in &session.project.plugin {
-        println!("  {:<10}  {family} = \"{plugin}\"", "pinned");
+        anstream::println!(
+            "  {}  {family} = \"{}\"",
+            style::label(10, "pinned"),
+            style::paint(style::PM, plugin)
+        );
     }
 
-    println!();
+    anstream::println!();
 
     if session.plugins.plugins.is_empty() {
-        println!("{:<12}  (none)", "Installed plugins");
-        println!();
-        println!("{}", session.no_project_error());
+        anstream::println!("{}  (none)", style::label(12, "Installed plugins"));
+        anstream::println!();
+        anstream::println!(
+            "{}",
+            style::paint(style::ERROR_BODY, session.no_project_error())
+        );
         return Ok(EXIT_OK);
     }
 
-    println!("Installed plugins");
+    anstream::println!("Installed plugins");
     for p in &session.plugins.plugins {
         match p.problem() {
-            None => println!(
-                "  {:<10} {:<8} v{}",
-                p.name,
+            None => anstream::println!(
+                "  {} {:<8} v{}",
+                style::padded(style::PM, 10, &p.name),
                 p.family.as_ref().map(Family::as_str).unwrap_or("?"),
-                p.version
+                style::paint(style::DIM, &p.version)
             ),
-            Some(why) => println!("  {:<10} ⚠ {why}", p.name),
+            Some(why) => anstream::println!(
+                "  {} ⚠ {}",
+                style::padded(style::PM, 10, &p.name),
+                style::paint(style::DIM, why)
+            ),
         }
     }
-    println!();
+    anstream::println!();
 
     let Some(root) = session.project_root().map(PathBuf::from) else {
-        println!("(no project root, cannot score)");
+        anstream::println!(
+            "{}",
+            style::paint(style::DIM, "(no project root, cannot score)")
+        );
         return Ok(EXIT_OK);
     };
 
     let families = detect::score_all(&session.plugins, &root, &session.project);
 
     if families.is_empty() {
-        println!(
-            "{:<12}  (no plugin can take part in the resolution)",
-            "Candidates"
+        anstream::println!(
+            "{}  (no plugin can take part in the resolution)",
+            style::label(12, "Candidates")
         );
         return Ok(EXIT_OK);
     }
 
-    println!("Candidates and scores");
+    anstream::println!("Candidates and scores");
     let mut rows: Vec<&FamilyScore> = families.values().collect();
     rows.sort_by(|a, b| {
         b.score
@@ -187,7 +229,7 @@ fn info(args: &Cli) -> crate::error::Result<u8> {
         } else {
             ""
         };
-        println!("  {}  score {}{pin}", fs.family.display(), fs.score);
+        anstream::println!("  {}  score {}{pin}", fs.family.display(), fs.score);
 
         for p in &fs.plugins {
             let hits = p.all_hits().collect::<Vec<_>>().join(", ");
@@ -196,44 +238,72 @@ fn info(args: &Cli) -> crate::error::Result<u8> {
             } else {
                 hits
             };
-            println!("    {:<8} score {:>4}   {detail}", p.name, p.score);
+            anstream::println!(
+                "    {} score {:>4}   {}",
+                style::padded(style::PM, 8, &p.name),
+                p.score,
+                style::paint(style::DIM, detail)
+            );
         }
     }
-    println!();
+    anstream::println!();
 
     // The resolution result
     match session.select(&root) {
         Ok(selection) => {
             session.emit_notes(&selection);
-            println!(
-                "{:<12}  {} ({})",
-                "Selected", selection.name, selection.crate_name
+            anstream::println!(
+                "{}  {} ({})",
+                style::label(12, "Selected"),
+                style::paint(style::PM, &selection.name),
+                selection.crate_name
             );
 
             match session.load_backend(&selection) {
                 Ok(backend) => {
                     let d = backend.diagnostics();
-                    println!("  {:<15} {}", "reported name", d.name);
-                    println!("  {:<15} {}", "reported family", d.family);
-                    println!("  {:<15} {}", "compiled with", d.rustc_version);
-                    println!("  {:<15} {}", "target", d.target);
+                    anstream::println!(
+                        "  {} {}",
+                        style::label(15, "reported name"),
+                        style::paint(style::PM, &d.name)
+                    );
+                    anstream::println!("  {} {}", style::label(15, "reported family"), d.family);
+                    anstream::println!(
+                        "  {} {}",
+                        style::label(15, "compiled with"),
+                        style::paint(style::DIM, d.rustc_version)
+                    );
+                    anstream::println!(
+                        "  {} {}",
+                        style::label(15, "target"),
+                        style::paint(style::DIM, d.target)
+                    );
 
                     if d.family != selection.family.as_str() {
-                        println!(
-                            "  ⚠ the manifest says it is {}, it says it is {} -- was the \
-                             manifest edited?",
-                            selection.family.as_str(),
-                            d.family
+                        anstream::println!(
+                            "  {}",
+                            style::paint(
+                                style::DIM,
+                                format!(
+                                    "⚠ the manifest says it is {}, it says it is {} -- was the \
+                                     manifest edited?",
+                                    selection.family.as_str(),
+                                    d.family
+                                )
+                            )
                         );
                     }
                 }
-                Err(e) => println!("  ⚠ failed to load: {e}"),
+                Err(e) => anstream::println!(
+                    "  {}",
+                    style::paint(style::DIM, format!("⚠ failed to load: {e}"))
+                ),
             }
         }
-        Err(failure) => println!(
-            "{:<12}  (nothing selected)\n{}",
-            "Selected",
-            failure.message()
+        Err(failure) => anstream::println!(
+            "{}  (nothing selected)\n{}",
+            style::label(12, "Selected"),
+            style::paint(style::ERROR_BODY, failure.message())
         ),
     }
 
@@ -263,9 +333,15 @@ fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
     let session = Session::open(args).map_err(PmpxError::Other)?;
 
     if session.plugins.plugins.is_empty() {
-        println!("No plugins are installed.");
-        println!();
-        println!("Install one with `pmpx plugin add <name>`, for example `pmpx plugin add cargo`.");
+        anstream::println!("No plugins are installed.");
+        anstream::println!();
+        anstream::println!(
+            "{}",
+            style::paint(
+                style::DIM,
+                "Install one with `pmpx plugin add <name>`, for example `pmpx plugin add cargo`."
+            )
+        );
         return Ok(EXIT_OK);
     }
 
@@ -295,14 +371,14 @@ fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
             .as_ref()
             .map(Family::display)
             .unwrap_or("(no family declared)");
-        println!("{title}");
+        anstream::println!("{}", style::paint(style::LABEL, title));
         for p in session
             .plugins
             .plugins
             .iter()
             .filter(|p| p.family == family)
         {
-            print!("  ");
+            anstream::print!("  ");
             print_plugin_row(p);
         }
     }
@@ -312,14 +388,18 @@ fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
 
 fn print_plugin_row(p: &crate::plugins::InstalledPlugin) {
     match p.problem() {
-        None => println!(
-            "{:<10} v{:<10} {:<28} {}",
-            p.name,
-            p.version,
+        None => anstream::println!(
+            "{} v{} {:<28} {}",
+            style::padded(style::PM, 10, &p.name),
+            style::padded(style::DIM, 10, &p.version),
             p.crate_name,
-            p.dir.display()
+            style::paint(style::DIM, p.dir.display())
         ),
-        Some(why) => println!("{:<10} ⚠ {why}", p.name),
+        Some(why) => anstream::println!(
+            "{} ⚠ {}",
+            style::padded(style::PM, 10, &p.name),
+            style::paint(style::DIM, why)
+        ),
     }
 }
 
@@ -332,7 +412,7 @@ fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
 
     let families = detect::score_all(&session.plugins, &root, &session.project);
     if families.is_empty() {
-        println!("No plugin can take part in the resolution.");
+        anstream::println!("No plugin can take part in the resolution.");
         return Ok(EXIT_OK);
     }
 
@@ -344,7 +424,7 @@ fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
             .filter(|s| &s.family == family)
             .map(|s| s.name.as_str());
 
-        println!("{}", family.display());
+        anstream::println!("{}", style::paint(style::LABEL, family.display()));
         let mut ranked: Vec<&ScoredPlugin> = fs.plugins.iter().collect();
         ranked.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
 
@@ -354,12 +434,21 @@ fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
             } else {
                 " "
             };
-            println!("  {} {:<8} score {:>4}", mark, p.name, p.score);
+            anstream::println!(
+                "  {} {} score {:>4}",
+                mark,
+                style::padded(style::PM, 8, &p.name),
+                p.score
+            );
         }
         if let Some(pinned) = session.project.pinned_plugin(family.as_str()) {
-            println!("  pinned: {pinned}");
+            anstream::println!(
+                "  {} {}",
+                style::paint(style::LABEL, "pinned:"),
+                style::paint(style::PM, pinned)
+            );
         }
-        println!();
+        anstream::println!();
     }
 
     Ok(EXIT_OK)
@@ -394,11 +483,11 @@ fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
     })
     .map_err(PmpxError::Other)?;
 
-    println!(
+    anstream::println!(
         "Pinned {} = \"{}\" in {}",
         family.as_str(),
-        plugin.name,
-        path.display()
+        style::paint(style::PM, &plugin.name),
+        style::paint(style::DIM, path.display())
     );
     Ok(EXIT_OK)
 }
@@ -424,7 +513,10 @@ fn plugin_unset(args: &Cli, family: Option<&str>, yes: bool) -> crate::error::Re
                 cfg.plugin.remove(f);
             })
             .map_err(PmpxError::Other)?;
-            println!("Removed the pin for {f} from {}", path.display());
+            anstream::println!(
+                "Removed the pin for {f} from {}",
+                style::paint(style::DIM, path.display())
+            );
         }
 
         None => {
@@ -454,10 +546,10 @@ fn plugin_unset(args: &Cli, family: Option<&str>, yes: bool) -> crate::error::Re
                 cfg.plugin.clear();
             })
             .map_err(PmpxError::Other)?;
-            println!(
+            anstream::println!(
                 "Removed the pins for {} from {}",
                 removed.join(", "),
-                path.display()
+                style::paint(style::DIM, path.display())
             );
         }
     }
@@ -516,18 +608,18 @@ fn plugin_add(args: &Cli, names: &[String], version: Option<&str>) -> crate::err
     }
 
     for name in names {
-        println!("Installing {name}...");
+        anstream::println!("Installing {}...", style::paint(style::PM, name));
         let installed = session
             .kit
             .install(name, version)
             .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
 
-        println!(
+        anstream::println!(
             "  {} v{} ({}) -> {}",
             installed.crate_name,
-            installed.version,
-            describe_source(installed.source),
-            installed.dir.display()
+            style::paint(style::DIM, installed.version),
+            style::paint(style::DIM, describe_source(installed.source)),
+            style::paint(style::DIM, installed.dir.display())
         );
     }
 
@@ -543,7 +635,7 @@ fn plugin_rm(args: &Cli, names: &[String]) -> crate::error::Result<u8> {
             .kit
             .uninstall(name)
             .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
-        println!("Removed {name}");
+        anstream::println!("Removed {}", style::paint(style::PM, name));
     }
 
     Ok(EXIT_OK)
@@ -567,7 +659,7 @@ fn plugin_update(args: &Cli, names: &[String], version: Option<&str>) -> crate::
     };
 
     if targets.is_empty() {
-        println!("No plugins to update.");
+        anstream::println!("No plugins to update.");
         return Ok(EXIT_OK);
     }
 
@@ -576,7 +668,11 @@ fn plugin_update(args: &Cli, names: &[String], version: Option<&str>) -> crate::
             .kit
             .update(&name, version)
             .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
-        println!("{} -> v{}", installed.crate_name, installed.version);
+        anstream::println!(
+            "{} -> v{}",
+            installed.crate_name,
+            style::paint(style::DIM, installed.version)
+        );
     }
 
     Ok(EXIT_OK)
@@ -595,14 +691,19 @@ fn plugin_search(args: &Cli, keyword: &str, limit: usize) -> crate::error::Resul
         .map_err(|e| PmpxError::Other(anyhow::anyhow!("{e}")))?;
 
     if results.is_empty() {
-        println!("crates.io has no crate matching {keyword:?}.");
+        anstream::println!("crates.io has no crate matching {keyword:?}.");
         return Ok(EXIT_OK);
     }
 
     for r in results {
-        println!("{:<32} v{:<10} ↓{}", r.name, r.version, r.downloads);
+        anstream::println!(
+            "{:<32} v{} ↓{}",
+            r.name,
+            style::padded(style::DIM, 10, &r.version),
+            r.downloads
+        );
         if let Some(d) = r.description {
-            println!("  {d}");
+            anstream::println!("  {}", style::paint(style::DIM, d));
         }
     }
 
@@ -617,32 +718,52 @@ fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
     if let Some(p) = session.plugins.by_name(name) {
         found = true;
-        println!("Installed");
-        println!("  {:<15} {}", "reported name", p.name);
-        println!("  {:<15} {}", "crate", p.crate_name);
-        println!("  {:<15} {}", "version", p.version);
-        println!(
-            "  {:<15} {}",
-            "family",
+        anstream::println!("Installed");
+        anstream::println!(
+            "  {} {}",
+            style::label(15, "reported name"),
+            style::paint(style::PM, &p.name)
+        );
+        anstream::println!("  {} {}", style::label(15, "crate"), p.crate_name);
+        anstream::println!(
+            "  {} {}",
+            style::label(15, "version"),
+            style::paint(style::DIM, &p.version)
+        );
+        anstream::println!(
+            "  {} {}",
+            style::label(15, "family"),
             p.family
                 .as_ref()
                 .map(Family::as_str)
                 .unwrap_or("(not declared)")
         );
-        println!(
-            "  {:<15} {}",
-            "ABI",
+        anstream::println!(
+            "  {} {}",
+            style::label(15, "ABI"),
             p.abi
                 .map(|a| a.to_string())
                 .unwrap_or_else(|| "(not declared)".into())
         );
-        println!("  {:<15} {}", "directory", p.dir.display());
-        println!("  {:<15} {}", "strong evidence", join_or_dash(&p.strong));
-        println!("  {:<15} {}", "weak evidence", join_or_dash(&p.weak));
+        anstream::println!(
+            "  {} {}",
+            style::label(15, "directory"),
+            style::paint(style::DIM, p.dir.display())
+        );
+        anstream::println!(
+            "  {} {}",
+            style::label(15, "strong evidence"),
+            style::paint(style::DIM, join_or_dash(&p.strong))
+        );
+        anstream::println!(
+            "  {} {}",
+            style::label(15, "weak evidence"),
+            style::paint(style::DIM, join_or_dash(&p.weak))
+        );
         if let Some(why) = p.problem() {
-            println!("  ⚠ {why}");
+            anstream::println!("  {}", style::paint(style::DIM, format!("⚠ {why}")));
         }
-        println!();
+        anstream::println!();
 
         if let Ok(backend) = session.load_backend(&crate::detect::Selection {
             crate_name: p.crate_name.clone(),
@@ -652,12 +773,24 @@ fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
             notes: Vec::new(),
         }) {
             let d = backend.diagnostics();
-            println!("Plugin reports");
-            println!("  {:<15} {}", "name", d.name);
-            println!("  {:<15} {}", "family", d.family);
-            println!("  {:<15} {}", "compiled with", d.rustc_version);
-            println!("  {:<15} {}", "target", d.target);
-            println!();
+            anstream::println!("Plugin reports");
+            anstream::println!(
+                "  {} {}",
+                style::label(15, "name"),
+                style::paint(style::PM, &d.name)
+            );
+            anstream::println!("  {} {}", style::label(15, "family"), d.family);
+            anstream::println!(
+                "  {} {}",
+                style::label(15, "compiled with"),
+                style::paint(style::DIM, d.rustc_version)
+            );
+            anstream::println!(
+                "  {} {}",
+                style::label(15, "target"),
+                style::paint(style::DIM, d.target)
+            );
+            anstream::println!();
         }
     }
 
@@ -666,24 +799,40 @@ fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
     match session.kit.view(&crate_name) {
         Ok(Some(info)) => {
             found = true;
-            println!("crates.io");
-            println!("  {:<15} {}", "crate", info.name);
-            println!("  {:<15} {}", "latest", info.version);
+            anstream::println!("crates.io");
+            anstream::println!("  {} {}", style::label(15, "crate"), info.name);
+            anstream::println!(
+                "  {} {}",
+                style::label(15, "latest"),
+                style::paint(style::DIM, info.version)
+            );
             if let Some(d) = info.description {
-                println!("  {:<15} {d}", "description");
+                anstream::println!(
+                    "  {} {}",
+                    style::label(15, "description"),
+                    style::paint(style::DIM, d)
+                );
             }
             if let Some(r) = info.repository {
-                println!("  {:<15} {r}", "repository");
+                anstream::println!(
+                    "  {} {}",
+                    style::label(15, "repository"),
+                    style::paint(style::DIM, r)
+                );
             }
         }
         Ok(None) => {
             if !found {
-                println!("crates.io has no {crate_name}.");
+                anstream::println!("crates.io has no {crate_name}.");
             }
         }
         Err(e) => {
             // Being offline or having no network must not hide the local information
-            eprintln!("pmpx: crates.io lookup failed: {e}");
+            anstream::eprintln!(
+                "{} {}",
+                style::paint(style::ERROR, "pmpx:"),
+                style::paint(style::ERROR_BODY, format!("crates.io lookup failed: {e}"))
+            );
         }
     }
 
@@ -721,7 +870,7 @@ fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
             let doc = read_toml_table(&path).map_err(PmpxError::Other)?;
             match lookup_dotted(&doc, key) {
                 Some(v) => {
-                    println!("{}", render_value(v));
+                    anstream::println!("{}", render_value(v));
                     Ok(EXIT_OK)
                 }
                 None => Err(PmpxError::Usage(format!(
@@ -743,10 +892,10 @@ fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
             let text = toml::to_string_pretty(&doc).map_err(|e| PmpxError::Other(e.into()))?;
             std::fs::write(&path, text).map_err(|e| PmpxError::Other(e.into()))?;
 
-            println!(
+            anstream::println!(
                 "Wrote {key} = {} to {}",
                 render_value(&parse_value(value)),
-                path.display()
+                style::paint(style::DIM, path.display())
             );
             Ok(EXIT_OK)
         }

@@ -17,6 +17,7 @@ use crate::error::PmpxError;
 use crate::plugins::PluginSet;
 use crate::runtime::{Backend, BackendError};
 use crate::spawn;
+use crate::style;
 
 /// The whole context of one run. One run reads the config once.
 ///
@@ -58,6 +59,16 @@ impl Session {
 
         let data_dir = global.plugin_store.effective_data_dir()?;
         let mut kit_cfg = KitConfig::new("pmpx").with_data_dir(&data_dir);
+
+        // The wrapper project that crate-plugin-kit generates has to depend on the contract
+        // crate, and `KitConfig` defaults that requirement to "0.1" -- which resolves to
+        // nothing, because this workspace releases at 0.0.x. Leaving it at the default makes
+        // every `pmpx plugin add` fail with an unrelated-looking `cargo build` exit 101.
+        //
+        // Taking it from our own version is safe because the workspace carries a single
+        // version, so `pmpx` and `pmpx-plugin` are always published as the same number. That
+        // also means this can never drift the way a hardcoded string would.
+        kit_cfg.contract_version = env!("CARGO_PKG_VERSION").to_string();
 
         kit_cfg.prefer_prebuilt = global.plugin_store.effective_prefer_prebuilt();
         let kit = CratePluginKit::<PmpxPluginV1>::new(kit_cfg).with_context(|| {
@@ -158,13 +169,19 @@ impl Session {
             return;
         }
         for note in &selection.notes {
-            eprintln!("pmpx: {note}");
+            anstream::eprintln!("{}", style::paint(style::DIM, format!("pmpx: {note}")));
         }
         if !selection.notes.is_empty() {
-            eprintln!(
-                "pmpx: override it for one run with `pmpx -p <name>`, or pin it in .pmpx.toml \
-                 with `pmpx plugin set {}`",
-                selection.name
+            anstream::eprintln!(
+                "{}",
+                style::paint(
+                    style::DIM,
+                    format!(
+                        "pmpx: override it for one run with `pmpx -p <name>`, or pin it in \
+                         .pmpx.toml with `pmpx plugin set {}`",
+                        selection.name
+                    )
+                )
             );
         }
     }
@@ -238,7 +255,7 @@ pub fn run_verb(
             // project root it falls back to the start directory.
             if allow_exec_fallback {
                 let cwd = session.start_dir.clone();
-                return passthrough(&cwd, args);
+                return passthrough(&cwd, args, session.quiet);
             }
             return Err(session.no_project_error());
         }
@@ -248,7 +265,7 @@ pub fn run_verb(
         Ok(s) => s,
         Err(failure) => {
             if allow_exec_fallback {
-                return passthrough(&root, args);
+                return passthrough(&root, args, session.quiet);
             }
             // Every `DetectFailure` is exit code 3
             return Err(failure.into());
@@ -263,10 +280,13 @@ pub fn run_verb(
     match backend.command(&root, &matched, verb, args) {
         Ok(Ok(spec)) => {
             let cwd = spec.cwd.clone().unwrap_or_else(|| root.clone());
+            announce(session.quiet, &spec);
             spawn::run(&spec, &cwd)
         }
 
-        Ok(Err(BackendError::UnsupportedVerb)) if allow_exec_fallback => passthrough(&root, args),
+        Ok(Err(BackendError::UnsupportedVerb)) if allow_exec_fallback => {
+            passthrough(&root, args, session.quiet)
+        }
 
         Ok(Err(e)) => Err(PmpxError::Backend(
             format!("{} cannot do `{verb}`: {e}", selection.name),
@@ -280,7 +300,7 @@ pub fn run_verb(
 /// Pass through verbatim: run the command the user gave, cwd = project root.
 ///
 /// This is the one exception to "unsupported is an error" and happens only for `exec`.
-fn passthrough(cwd: &Path, args: &[OsString]) -> crate::error::Result<u8> {
+fn passthrough(cwd: &Path, args: &[OsString], quiet: bool) -> crate::error::Result<u8> {
     let Some((program, rest)) = args.split_first() else {
         return Err(PmpxError::Usage(
             "`pmpx exec` needs a command, for example `pmpx exec ls`".to_string(),
@@ -292,7 +312,16 @@ fn passthrough(cwd: &Path, args: &[OsString]) -> crate::error::Result<u8> {
         args: rest.to_vec(),
         cwd: Some(cwd.to_path_buf()),
     };
+    announce(quiet, &spec);
     spawn::run(&spec, cwd)
+}
+
+/// Show the command that is about to run, unless `--quiet` is set.
+fn announce(quiet: bool, spec: &pmpx_plugin::CommandSpec) {
+    if quiet {
+        return;
+    }
+    spawn::announce(spec);
 }
 
 #[cfg(test)]

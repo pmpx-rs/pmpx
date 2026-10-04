@@ -27,6 +27,7 @@ use std::process::{Command, Stdio};
 use pmpx_plugin::CommandSpec;
 
 use crate::error::{PmpxError, Result};
+use crate::style;
 
 /// The kind of backend executable that was resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +308,25 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
+/// Show the command that is about to run, on stderr.
+///
+/// It is meant to be called just before [`run`]. stderr rather than stdout: the backend
+/// inherits stdout, which the caller may be reading through a pipe. The arguments are printed
+/// as they are handed over, without adding quotes of our own -- a line that quoted them would
+/// no longer describe what actually runs.
+pub fn announce(spec: &CommandSpec) {
+    let mut line = format!(
+        "{} {}",
+        style::paint(style::DIM, "pmpx ->"),
+        style::paint(style::PM, spec.program.to_string_lossy())
+    );
+    for arg in &spec.args {
+        line.push(' ');
+        line.push_str(&arg.to_string_lossy());
+    }
+    anstream::eprintln!("{line}");
+}
+
 /// Really run it: inherit stdio, wait for it to finish, return its exit code verbatim.
 ///
 /// The return value is not `Result<()>`: "the tests failed" and "pmpx failed" are two
@@ -334,9 +354,9 @@ fn exit_code_of(status: std::process::ExitStatus) -> u8 {
         // On Windows an exit code can be any u32, while Unix only keeps the low 8 bits. Take
         // the low 8 bits instead of erroring -- the user's script cares about "nonzero", not
         // the exact value.
-        eprintln!(
-            "pmpx: backend exit code {code} is outside 0-255, passing through the low 8 bits"
-        );
+        error_line(format!(
+            "backend exit code {code} is outside 0-255, passing through the low 8 bits"
+        ));
         return (code & 0xFF) as u8;
     }
 
@@ -345,13 +365,22 @@ fn exit_code_of(status: std::process::ExitStatus) -> u8 {
     {
         use std::os::unix::process::ExitStatusExt;
         if let Some(sig) = status.signal() {
-            eprintln!("pmpx: the backend was killed by signal {sig}");
+            error_line(format!("the backend was killed by signal {sig}"));
             return (128 + sig).clamp(0, 255) as u8;
         }
     }
 
-    eprintln!("pmpx: cannot read the backend exit code, treating it as 1");
+    error_line("cannot read the backend exit code, treating it as 1");
     1
+}
+
+/// One `pmpx:` diagnostic on stderr.
+fn error_line(body: impl std::fmt::Display) {
+    anstream::eprintln!(
+        "{} {}",
+        style::paint(style::ERROR, "pmpx:"),
+        style::paint(style::ERROR_BODY, body)
+    );
 }
 
 #[cfg(test)]

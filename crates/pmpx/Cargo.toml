@@ -25,6 +25,11 @@ crate-plugin-kit.workspace = true
 
 clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
+
+# Colouring only. Both crates are already in the tree through clap's default `color` feature,
+# so these direct declarations add no build work and no transitive dependency.
+anstream = "1"
+anstyle = "1"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 

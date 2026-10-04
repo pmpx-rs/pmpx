@@ -29,6 +29,7 @@ mod hints;
 mod plugins;
 mod runtime;
 mod spawn;
+mod style;
 
 use clap::Parser;
 
@@ -44,7 +45,11 @@ fn dispatch(args: &cli::Cli) -> u8 {
         Ok(code) => code,
         Err(e) => {
             // One shared prefix so the user can spot pmpx's own words inside backend output.
-            eprintln!("pmpx: {e}");
+            anstream::eprintln!(
+                "{} {}",
+                style::paint(style::ERROR, "pmpx:"),
+                style::paint(style::ERROR_BODY, &e)
+            );
             e.exit_code()
         }
     }

@@ -32,7 +32,8 @@ pub struct Cli {
     #[arg(long = "no-walk-up", global = true)]
     pub no_walk_up: bool,
 
-    /// Turn off the notes on stderr (ambiguous detection, uninstalled candidates, ...)
+    /// Suppress hints and the resolved command on stderr (ambiguous detection, uninstalled
+    /// candidates, ...)
     #[arg(short = 'q', long = "quiet", global = true)]
     pub quiet: bool,
 
