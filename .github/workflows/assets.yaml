@@ -126,6 +126,13 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
     steps:
+      # `gh` has to be told which repository it is working on, and it has two ways of being
+      # told: `GH_REPO` (set on the job above) and the git remote a checkout leaves behind.
+      # Both are here on purpose -- this job is the only place a release is written to
+      # without a checkout, the failure it caused ("fatal: not a git repository") is
+      # invisible until the tag is already out, and a second failed run costs another tag.
+      - uses: actions/checkout@v7
+
       - name: Hash every archive
         shell: bash
         env:
