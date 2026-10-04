@@ -6,7 +6,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 /// Global arguments. They apply to every subcommand, hence `global`.
 #[derive(Debug, Parser)]
@@ -229,13 +229,4 @@ pub enum ConfigCommand {
         #[arg(value_name = "VALUE")]
         value: String,
     },
-}
-
-/// Output format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum OutputFormat {
-    /// Human readable
-    Text,
-    /// Machine readable
-    Json,
 }
