@@ -217,9 +217,9 @@ detect files that matched. It may not read files, write files, read the environm
 processes — which is why shape decisions go through `Context::matched`:
 
 ```rust
-// Yarn classic and Berry need different commands, and the only evidence is a file
-Verb::Run if ctx.has_matched(".yarnrc.yml") => CommandSpec::new("yarn").arg("berry"),
-Verb::Run => CommandSpec::new("yarn").arg("run"),
+// Yarn classic and Berry spell this one verb differently, and the only evidence is a file.
+Verb::Update if ctx.has_matched(".yarnrc.yml") => Ok(CommandSpec::new("yarn").arg("up")),
+Verb::Update => Ok(CommandSpec::new("yarn").arg("upgrade")),
 ```
 
 The contract crate is [`pmpx-plugin`](https://crates.io/crates/pmpx-plugin) —

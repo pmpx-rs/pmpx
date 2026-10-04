@@ -206,9 +206,9 @@ pmpx_plugin::export!(create);
 写文件、读环境变量、起进程 —— 所以形态判断走 `Context::matched`：
 
 ```rust
-// yarn classic 与 Berry 需要不同的命令，而唯一证据是一个文件在不在
-Verb::Run if ctx.has_matched(".yarnrc.yml") => CommandSpec::new("yarn").arg("berry"),
-Verb::Run => CommandSpec::new("yarn").arg("run"),
+// yarn classic 与 Berry 只有一个动词拼法不同，而唯一证据是一个文件在不在
+Verb::Update if ctx.has_matched(".yarnrc.yml") => Ok(CommandSpec::new("yarn").arg("up")),
+Verb::Update => Ok(CommandSpec::new("yarn").arg("upgrade")),
 ```
 
 契约 crate 是 [`pmpx-plugin`](https://crates.io/crates/pmpx-plugin) ——

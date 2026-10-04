@@ -1,6 +1,6 @@
 [package]
 name = "pmpx-plugin"
-description = "Plugin contract for pmpx: the PackageManager trait and the stable C ABI that carries it across dlopen."
+description = "Defines the pmpx plugin contract and the C ABI that carries it across dlopen."
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true

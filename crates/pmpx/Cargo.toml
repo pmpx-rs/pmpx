@@ -1,8 +1,8 @@
 [package]
 name = "pmpx"
-# The description must not say "which families are supported" -- pluggable backends are the
-# tool itself. The cargo / pnpm in parentheses are **examples**, not a scope.
-description = "One command surface for a project's package managers. Detects the project type, routes the verb, and spawns the real tool (cargo, pnpm, ...)."
+# The description must not say which families are supported -- pluggable backends are the tool
+# itself, so naming one would turn an example into a scope.
+description = "Detects a project and routes package manager commands to the matching tool."
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
