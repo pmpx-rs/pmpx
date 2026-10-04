@@ -2,8 +2,12 @@
 //!
 //! A `.cmd` / `.bat` cannot be started directly with arguments: `cmd /c` has its own quoting
 //! rules, so the whole command line is built here as one string and delivered through
-//! `raw_arg`. [`quote_arg`] follows the Windows `CommandLineToArgvW` rules, and it is kept in the
-//! test build on every platform because those rules are exactly where mistakes happen.
+//! `raw_arg`. `quote_arg` follows the Windows `CommandLineToArgvW` rules, and it is kept in
+//! the test build on every platform because those rules are exactly where mistakes happen.
+//!
+//! (`quote_arg` is a code span rather than a link on purpose: it only exists under
+//! `cfg(any(windows, test))`, so a link to it would be unresolved in the Unix documentation
+//! build, which is a `-D warnings` error there.)
 
 #[cfg(windows)]
 use std::ffi::OsString;
