@@ -18,7 +18,7 @@ rust-version = "1.88"
 pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.0.4" }
 
 # General plugin management library. An external dependency, consumed by version, not by path.
-crate-plugin-kit = "0.1.1"
+crate-plugin-kit = "0.1.2"
 
 [profile.release]
 # Everything favors fast runtime; slow builds are fine.

@@ -60,14 +60,12 @@ impl Session {
         let data_dir = global.plugin_store.effective_data_dir()?;
         let mut kit_cfg = KitConfig::new("pmpx").with_data_dir(&data_dir);
 
-        // The wrapper project that crate-plugin-kit generates has to depend on the contract
-        // crate, and `KitConfig` defaults that requirement to "0.1" -- which resolves to
-        // nothing, because this workspace releases at 0.0.x. Leaving it at the default makes
-        // every `pmpx plugin add` fail with an unrelated-looking `cargo build` exit 101.
+        // Only a fallback: the wrapper crate-plugin-kit generates repeats whatever the plugin
+        // crate itself declares for the contract crate. `KitConfig`'s default here is "0.1",
+        // which resolves to nothing while this workspace releases at 0.0.x.
         //
-        // Taking it from our own version is safe because the workspace carries a single
-        // version, so `pmpx` and `pmpx-plugin` are always published as the same number. That
-        // also means this can never drift the way a hardcoded string would.
+        // Our own version is the right fallback because the workspace carries a single version,
+        // so `pmpx` and `pmpx-plugin` are always published as the same number.
         kit_cfg.contract_version = env!("CARGO_PKG_VERSION").to_string();
 
         kit_cfg.prefer_prebuilt = global.plugin_store.effective_prefer_prebuilt();
