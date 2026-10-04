@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version    = "0.0.2"
+version    = "0.0.3"
 edition    = "2021"
 license    = "MIT"
 repository = "https://github.com/pmpx-rs/pmpx"
@@ -15,7 +15,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 # Both path and version: at publish time the path is stripped and only the version remains,
 # so version is mandatory, and it must match [workspace.package] version exactly.
-pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.0.2" }
+pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.0.3" }
 
 # General plugin management library. An external dependency, consumed by version, not by path.
 crate-plugin-kit = "0.1.1"
