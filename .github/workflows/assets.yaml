@@ -119,8 +119,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # `gh` works out which repository it is talking to from the git remote, and this job has
+    # no checkout on purpose (nothing here reads the source), so the repository is named in
+    # the environment instead. Without this, `gh release download` fails with
+    # "fatal: not a git repository".
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
-      # No checkout: `gh` knows the repository from the workflow itself.
       - name: Hash every archive
         shell: bash
         env:
