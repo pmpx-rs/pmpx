@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version    = "0.0.0"
+version    = "0.0.1"
 edition    = "2021"
 license    = "MIT"
 repository = "https://github.com/pmpx-rs/pmpx"
@@ -14,7 +14,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 # 同时写 path 和 version：发布时路径会被剥掉，只留版本，所以 version 是硬性要求，
 # 且必须与 [workspace.package] version 一模一样。
-pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.0.0" }
+pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.0.1" }
 
 # 通用插件管理库。外部依赖，按版本消费，不走 path。
 crate-plugin-kit = "0.1.1"
