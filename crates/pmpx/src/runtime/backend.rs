@@ -1,15 +1,5 @@
-//! Load the selected plugin and call it across the ABI.
-//!
-//! Validation happens before the call, not at load time: `crate-plugin-kit`'s `load()` only
-//! guarantees "it can be `dlopen`ed and the entry symbol can be fetched"; whether this
-//! plugin can talk to this host is decided by pmpx -- right after getting the vtable it
-//! checks `abi_version == ABI_VERSION` (equality is enough, not full crate version equality)
-//! and that `name()` matches what the manifest declared.
-//!
-//! Every call into the plugin is wrapped in `catch_unwind`, but that is only a fallback --
-//! the main defence is the `extern "C"` shell that the plugin-side `export!` generates:
-//! since Rust 1.81, letting a panic cross `extern "C"` aborts outright and the host cannot
-//! rescue it.
+//! The loaded plugin: one `dlopen` handle, one validated vtable, and every call that goes through
+//! it.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -21,51 +11,11 @@ use pmpx_plugin::abi::{
 };
 use pmpx_plugin::{CommandSpec, Verb};
 
+use super::error::BackendError;
+use super::strings::{read_bytes, read_plugin_str};
+use super::BackendDiagnostics;
 use crate::error::{PmpxError, Result};
 use crate::plugins::InstalledPlugin;
-
-/// A failure the plugin reported explicitly.
-///
-/// **Kept separate from [`PmpxError`]** because the meaning differs: `PmpxError` is "something
-/// went wrong on pmpx's side", this is "the plugin answered normally that it cannot do this".
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BackendError {
-    /// The plugin does not support this verb.
-    ///
-    /// `pmpx exec` degrades to passing through verbatim when it gets this; the other six
-    /// verbs keep "unsupported is an error".
-    UnsupportedVerb,
-
-    /// The plugin says the arguments are wrong.
-    InvalidArgs(String),
-
-    /// The plugin failed internally, or it panicked.
-    Internal(String),
-}
-
-impl BackendError {
-    /// The matching process exit code.
-    pub fn exit_code(&self) -> u8 {
-        match self {
-            // "this backend cannot do what you asked" -- same code as a usage error
-            BackendError::UnsupportedVerb | BackendError::InvalidArgs(_) => {
-                crate::error::EXIT_USAGE
-            }
-            // the plugin blew up -- counted as a pmpx error of its own
-            BackendError::Internal(_) => crate::error::EXIT_INTERNAL,
-        }
-    }
-}
-
-impl std::fmt::Display for BackendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BackendError::UnsupportedVerb => f.write_str("this backend does not support that verb"),
-            BackendError::InvalidArgs(m) => write!(f, "the backend rejected the arguments: {m}"),
-            BackendError::Internal(m) => write!(f, "the backend failed internally: {m}"),
-        }
-    }
-}
 
 /// A plugin that is loaded and has passed the ABI and name checks.
 ///
@@ -288,110 +238,5 @@ impl Backend {
             rustc_version: self.rustc_version(),
             target: self.target(),
         }
-    }
-}
-
-/// What the plugin reports about itself, as shown by `pmpx info`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BackendDiagnostics {
-    /// The plugin's self-reported name.
-    pub name: String,
-    /// The family the plugin reports for itself.
-    pub family: String,
-    /// The rustc that compiled it.
-    pub rustc_version: String,
-    /// The target triple it was compiled for.
-    pub target: String,
-}
-
-/// Call one vtable function that returns a [`PmpxStr`], read it as a Rust string, and
-/// **release it as agreed**.
-///
-/// # Safety
-///
-/// `f` and `free` must come from the same still-valid vtable.
-unsafe fn read_plugin_str(
-    f: unsafe extern "C" fn() -> PmpxStr,
-    free: unsafe extern "C" fn(PmpxStr),
-) -> String {
-    let s = unsafe { f() };
-    let out = unsafe { read_bytes(s) };
-    // The memory belongs to the plugin and must be given back after reading -- the host
-    // never frees what it did not allocate.
-    unsafe { free(s) };
-    out
-}
-
-/// Read a [`PmpxStr`] without releasing it.
-///
-/// # Safety
-///
-/// `s` must describe read-only memory that is valid for the duration of the call.
-unsafe fn read_bytes(s: PmpxStr) -> String {
-    if s.ptr.is_null() || s.len == 0 {
-        return String::new();
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(s.ptr, s.len) };
-    String::from_utf8_lossy(bytes).into_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn backend_error_exit_codes_match_the_table() {
-        assert_eq!(
-            BackendError::UnsupportedVerb.exit_code(),
-            crate::error::EXIT_USAGE
-        );
-        assert_eq!(
-            BackendError::InvalidArgs("x".into()).exit_code(),
-            crate::error::EXIT_USAGE
-        );
-        assert_eq!(
-            BackendError::Internal("x".into()).exit_code(),
-            crate::error::EXIT_INTERNAL
-        );
-    }
-
-    #[test]
-    fn backend_error_messages_name_the_backend_situation() {
-        assert!(BackendError::UnsupportedVerb
-            .to_string()
-            .contains("does not support"));
-        assert!(BackendError::InvalidArgs("a".into())
-            .to_string()
-            .contains('a'));
-        assert!(BackendError::Internal("b".into()).to_string().contains('b'));
-    }
-
-    #[test]
-    fn reading_an_empty_string_is_safe() {
-        assert_eq!(unsafe { read_bytes(PmpxStr::EMPTY) }, "");
-    }
-
-    #[test]
-    fn reading_a_null_pointer_is_safe() {
-        let s = PmpxStr {
-            ptr: std::ptr::null(),
-            len: 99,
-        };
-        assert_eq!(
-            unsafe { read_bytes(s) },
-            "",
-            "a null pointer must not be dereferenced"
-        );
-    }
-
-    #[test]
-    fn reading_non_utf8_bytes_does_not_panic() {
-        let bytes = [0xff, 0xfe, 0xfd];
-        let s = PmpxStr {
-            ptr: bytes.as_ptr(),
-            len: bytes.len(),
-        };
-        // Diagnostics only, so a lossy conversion is enough -- but it must not panic
-        assert!(!unsafe { read_bytes(s) }.is_empty());
     }
 }

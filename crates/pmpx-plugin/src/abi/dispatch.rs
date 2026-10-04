@@ -1,0 +1,192 @@
+//! The output side: writing a command into the boundary, the dispatch entry point, and the panic
+//! guard around it.
+//!
+//! This logic lives here rather than inside the `export!` macro so that it can be tested directly.
+
+use std::path::PathBuf;
+
+use crate::{CommandSpec, Context, PackageManager, Verb};
+
+use super::marshal::{free_str, leak_bytes, os_to_bytes, read_os, read_str};
+use super::types::{PmpxCommand, PmpxStr, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_OK};
+
+/// Write a [`CommandSpec`] in its cross-boundary form, with the memory allocated by this side.
+/// # Safety
+/// `out` must point at a writable [`PmpxCommand`].
+pub unsafe fn write_command(out: *mut PmpxCommand, spec: CommandSpec) {
+    let program = leak_bytes(&os_to_bytes(&spec.program));
+
+    let args: Vec<PmpxStr> = spec
+        .args
+        .iter()
+        .map(|a| leak_bytes(&os_to_bytes(a)))
+        .collect();
+    let args_boxed: Box<[PmpxStr]> = args.into_boxed_slice();
+    let args_len = args_boxed.len();
+    let args_ptr = args_boxed.as_ptr();
+    std::mem::forget(args_boxed);
+
+    let cwd = match &spec.cwd {
+        Some(p) => leak_bytes(&os_to_bytes(p.as_os_str())),
+        None => PmpxStr::EMPTY,
+    };
+
+    unsafe {
+        *out = PmpxCommand {
+            program,
+            args: args_ptr,
+            args_len,
+            cwd,
+        };
+    }
+}
+
+/// Free the contents of a [`PmpxCommand`] filled in by this side's [`write_command`], without
+/// freeing `c` itself (that struct lives on the host side, usually on the stack).
+/// # Safety
+/// `c` must come from one successful `command` call on this side and may be freed only once.
+pub unsafe fn free_command(c: *mut PmpxCommand) {
+    if c.is_null() {
+        return;
+    }
+    let cmd = unsafe { &*c };
+
+    unsafe { free_str(cmd.program) };
+    unsafe { free_str(cmd.cwd) };
+
+    if !cmd.args.is_null() && cmd.args_len > 0 {
+        // Strictly paired with the Box<[PmpxStr]> in write_command.
+        let raw = std::ptr::slice_from_raw_parts_mut(cmd.args as *mut PmpxStr, cmd.args_len);
+        let args = unsafe { Box::from_raw(raw) };
+        for s in args.iter() {
+            unsafe { free_str(*s) };
+        }
+    }
+}
+
+/// All the wiring of one `command` call: read the inputs, call
+/// [`crate::PackageManager::command`], write the output.
+/// This logic lives here rather than in the `export!` macro so that it can be tested directly.
+/// # Safety
+/// See the Safety section of [`PmpxPluginV1::command`](crate::abi::PmpxPluginV1::command). In
+/// addition, `plugin` must be a valid instance in this process.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn dispatch_command(
+    plugin: &dyn PackageManager,
+    project_root: PmpxStr,
+    matched: *const PmpxStr,
+    matched_len: usize,
+    verb: u32,
+    args: *const PmpxStr,
+    args_len: usize,
+    out: *mut PmpxCommand,
+) -> u32 {
+    if out.is_null() {
+        return PMPX_ERR_INVALID_ARGS;
+    }
+
+    let Some(verb) = Verb::from_abi(verb) else {
+        return PMPX_ERR_INVALID_ARGS;
+    };
+
+    let project_root = PathBuf::from(unsafe { read_os(project_root) });
+
+    // `matched` is text (file names declared in the manifest), so UTF-8 is checked here.
+    let mut matched_names = Vec::with_capacity(matched_len);
+    for i in 0..matched_len {
+        let raw = unsafe { *matched.add(i) };
+        match unsafe { read_str(raw) } {
+            Ok(s) => matched_names.push(s.to_string()),
+            Err(code) => return code,
+        }
+    }
+
+    // `args` are arguments and may be arbitrary bytes -- converted to OsString as-is, losslessly.
+    let mut arg_list = Vec::with_capacity(args_len);
+    for i in 0..args_len {
+        let raw = unsafe { *args.add(i) };
+        arg_list.push(unsafe { read_os(raw) });
+    }
+
+    let ctx = Context {
+        project_root,
+        matched: matched_names,
+    };
+
+    match plugin.command(&ctx, verb, &arg_list) {
+        Ok(spec) => {
+            unsafe { write_command(out, spec) };
+            PMPX_OK
+        }
+        Err(e) => e.code(),
+    }
+}
+
+/// Wrap one cross-boundary call in `catch_unwind`.
+/// Since Rust 1.81, letting a panic cross an `extern "C"` boundary aborts the process outright,
+/// and the host's `catch_unwind` cannot help at all, so the plugin has to catch it itself. The
+/// host side wraps one more layer, for the cases where "the plugin forgot to wrap" or "the plugin
+/// was built with `panic=abort`".
+pub fn guard(f: impl FnOnce() -> u32) -> u32 {
+    // `AssertUnwindSafe`: once the caller has PMPX_ERR_INTERNAL it aborts the operation and never
+    // touches the caught state again.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(PMPX_ERR_INTERNAL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_and_frees_a_command() {
+        let spec = CommandSpec::new("cargo")
+            .arg("add")
+            .arg("serde")
+            .cwd("/tmp/project");
+
+        let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
+        unsafe { write_command(out.as_mut_ptr(), spec) };
+        let mut cmd = unsafe { out.assume_init() };
+
+        assert_eq!(cmd.args_len, 2);
+        let program = unsafe { std::slice::from_raw_parts(cmd.program.ptr, cmd.program.len) };
+        assert_eq!(program, b"cargo");
+
+        let arg0 = unsafe { *cmd.args.add(0) };
+        let a0 = unsafe { std::slice::from_raw_parts(arg0.ptr, arg0.len) };
+        assert_eq!(a0, b"add");
+
+        let cwd = unsafe { std::slice::from_raw_parts(cmd.cwd.ptr, cmd.cwd.len) };
+        assert_eq!(cwd, b"/tmp/project");
+
+        unsafe { free_command(&mut cmd as *mut _) };
+    }
+
+    #[test]
+    fn writes_a_command_with_no_args_and_no_cwd() {
+        let spec = CommandSpec::new("cargo");
+
+        let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
+        unsafe { write_command(out.as_mut_ptr(), spec) };
+        let mut cmd = unsafe { out.assume_init() };
+
+        assert_eq!(cmd.args_len, 0);
+        assert!(
+            cmd.cwd.is_empty(),
+            "cwd without an override should be EMPTY"
+        );
+
+        unsafe { free_command(&mut cmd as *mut _) };
+    }
+
+    #[test]
+    fn free_command_tolerates_null() {
+        unsafe { free_command(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn guard_turns_a_panic_into_internal_error() {
+        assert_eq!(guard(|| PMPX_OK), PMPX_OK);
+        assert_eq!(guard(|| panic!("the plugin blew up")), PMPX_ERR_INTERNAL);
+    }
+}

@@ -1,0 +1,155 @@
+//! The sandbox every end-to-end area builds on: a temporary pmpx config directory, a plugin
+//! directory, a project directory, and the fake plugin compiled on demand.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+/// The path of the pmpx binary. cargo provides this environment variable for bin targets.
+pub(crate) const PMPX: &str = env!("CARGO_BIN_EXE_pmpx");
+
+/// A sandbox: a pmpx config directory, a plugin directory, and a "project" directory.
+pub(crate) struct Sandbox {
+    _tmp: tempfile::TempDir,
+    pub(crate) config_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
+    pub(crate) project: PathBuf,
+}
+
+impl Sandbox {
+    pub(crate) fn new() -> Self {
+        let tmp = tempfile::tempdir().expect("should be able to create a temporary directory");
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        let project = tmp.path().join("project");
+
+        for d in [&config_dir, &data_dir, &project] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+
+        Self {
+            _tmp: tmp,
+            config_dir,
+            data_dir,
+            project,
+        }
+    }
+
+    /// Put a file in the project directory.
+    pub(crate) fn file(&self, name: &str) -> &Self {
+        let p = self.project.join(name);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(p, "").unwrap();
+        self
+    }
+
+    /// Write a global config.
+    pub(crate) fn global_config(&self, body: &str) -> &Self {
+        std::fs::write(self.config_dir.join("config.toml"), body).unwrap();
+        self
+    }
+
+    /// Lay out an "installed plugin" directory (cdylib + manifest).
+    pub(crate) fn install_plugin(
+        &self,
+        crate_name: &str,
+        manifest: &str,
+        lib: Option<&Path>,
+    ) -> &Self {
+        let dir = self.data_dir.join("plugins").join(crate_name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pmpx-plugin.toml"), manifest).unwrap();
+
+        if let Some(src) = lib {
+            std::fs::copy(src, dir.join(src.file_name().unwrap())).unwrap();
+        }
+        self
+    }
+
+    /// Run pmpx once. **The working directory is the project directory**, and the two
+    /// pmpx-specific environment variables point at the sandbox.
+    ///
+    /// It deliberately does **not** `env_clear()`: that would stop even `cargo` itself from
+    /// running (it needs `USERPROFILE` / `APPDATA` and the like). pmpx only honours those two
+    /// `PMPX_*` variables; it is supposed to inherit the rest of the environment verbatim.
+    pub(crate) fn run(&self, args: &[&str]) -> Output {
+        Command::new(PMPX)
+            .args(args)
+            .current_dir(&self.project)
+            .env("PMPX_CONFIG_DIR", &self.config_dir)
+            .env("PMPX_DATA_DIR", &self.data_dir)
+            .output()
+            .expect("should be able to start pmpx")
+    }
+
+    /// Run once and assert success, returning stdout.
+    pub(crate) fn ok(&self, args: &[&str]) -> String {
+        let out = self.run(args);
+        assert!(
+            out.status.success(),
+            "`pmpx {}` should succeed, exit code {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            args.join(" "),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+}
+
+pub(crate) fn stdout_of(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+pub(crate) fn stderr_of(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+// ---------------------------------------------------------------------------
+// Compiling the real plugin
+// ---------------------------------------------------------------------------
+
+/// Build the fake plugin and return the cdylib path.
+pub(crate) fn build_fake_plugin() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("fake-plugin");
+    let target_dir = tmp.path().join("target");
+
+    let status = Command::new("cargo")
+        .args(["build", "--release", "--manifest-path"])
+        .arg(fixture.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .status()
+        .expect("should be able to start cargo");
+    assert!(status.success(), "the fake plugin should compile");
+
+    let lib = crate_plugin_kit::find_library(&target_dir.join("release"), "pmpx_plugin_fakepm")
+        .expect("should find the fake plugin's cdylib");
+
+    (tmp, lib)
+}
+
+const FAKEPM_MANIFEST: &str = r#"
+[plugin]
+name    = "fakepm"
+version = "0.1.0"
+abi     = 1
+family  = "faketest"
+
+[detect]
+strong = ["fakepm.lock"]
+weak   = ["fakepm.json"]
+"#;
+
+/// A sandbox with the fake plugin installed.
+pub(crate) fn sandbox_with_plugin() -> (tempfile::TempDir, Sandbox, PathBuf) {
+    let (build_tmp, lib) = build_fake_plugin();
+    let sb = Sandbox::new();
+    sb.install_plugin("pmpx-plugin-fakepm", FAKEPM_MANIFEST, Some(&lib));
+    (build_tmp, sb, lib)
+}
