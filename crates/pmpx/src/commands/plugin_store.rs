@@ -25,17 +25,36 @@ pub(super) fn plugin_add(
         ));
     }
 
+    // Installing several names one by one can stop halfway, and the ones before the failure stay
+    // installed -- so they are named when that happens, instead of leaving the user to guess what
+    // state their plugin directory is in.
+    let mut installed_so_far: Vec<String> = Vec::new();
+
     for name in names {
         anstream::println!("Installing {}...", style::paint(style::PM, name));
-        let installed = session.kit.install(name, version)?;
 
-        anstream::println!(
-            "  {} v{} ({}) -> {}",
-            installed.crate_name,
-            style::paint(style::DIM, installed.version),
-            style::paint(style::DIM, describe_source(installed.source)),
-            style::paint(style::DIM, installed.dir.display())
-        );
+        match session.kit.install(name, version) {
+            Ok(installed) => {
+                anstream::println!(
+                    "  {} v{} ({}) -> {}",
+                    installed.crate_name,
+                    style::paint(style::DIM, installed.version),
+                    style::paint(style::DIM, describe_source(installed.source)),
+                    style::paint(style::DIM, installed.dir.display())
+                );
+                installed_so_far.push(installed.crate_name);
+            }
+
+            Err(e) => {
+                if !installed_so_far.is_empty() {
+                    crate::error::note_line(format!(
+                        "{name} was not installed; installed before it: {}",
+                        installed_so_far.join(", ")
+                    ));
+                }
+                return Err(e.into());
+            }
+        }
     }
 
     Ok(EXIT_OK)
