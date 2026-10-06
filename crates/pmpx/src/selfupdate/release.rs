@@ -60,15 +60,7 @@ pub(super) fn latest_version() -> anyhow::Result<Version> {
         // No release has been published for this repository yet. That is a state, not a
         // failure of the request.
         Ok(None) => return Err(anyhow!("no release has been published yet")),
-        Err(error) => {
-            let mut error = error;
-            if error.to_string().contains("403") {
-                error = error.context(
-                    "GitHub rate-limits requests that are not authenticated; trying again later usually works",
-                );
-            }
-            return Err(error.context(format!("cannot ask {url}")));
-        }
+        Err(error) => return Err(error.context(format!("cannot ask {url}"))),
     };
 
     let json: serde_json::Value =
@@ -81,6 +73,19 @@ pub(super) fn latest_version() -> anyhow::Result<Version> {
 
     Version::parse(tag)
         .ok_or_else(|| anyhow!("the latest release is tagged {tag}, which is not a version"))
+}
+
+/// How to read a request GitHub refused.
+///
+/// 403 and 429 are what GitHub answers for unauthenticated rate limiting -- and a repository that
+/// is not public answers 403 as well, so both causes have to be named. This used to be one caller
+/// matching on the text `"403"` inside the error, which any change to the message would have
+/// silently broken.
+fn refused_message(code: u16, url: &str) -> String {
+    format!(
+        "GitHub refused the request ({code}): it rate-limits unauthenticated requests, and a \
+         repository that is not public answers the same way ({url})"
+    )
 }
 
 /// Downloads one URL. `Ok(None)` is a 404, which for a release asset means "not published".
@@ -104,6 +109,9 @@ pub(super) fn download(url: &str) -> anyhow::Result<Option<Vec<u8>>> {
             Ok(Some(body))
         }
         Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(ureq::Error::StatusCode(code)) if code == 403 || code == 429 => {
+            Err(anyhow!("{}", refused_message(code, url)))
+        }
         Err(error) => Err(anyhow!("{error} ({url})")),
     }
 }
@@ -135,5 +143,17 @@ mod tests {
             asset_stem(),
             format!("pmpx-{}", crate_plugin_kit::TARGET_TRIPLE)
         );
+    }
+
+    /// A refused request has two possible causes and the message has to name both, because there
+    /// is no way to tell them apart from the status code alone.
+    #[test]
+    fn a_refused_request_explains_both_causes() {
+        let message = refused_message(403, "https://example.invalid/x");
+
+        assert!(message.contains("403"), "{message}");
+        assert!(message.contains("rate-limits"), "{message}");
+        assert!(message.contains("not public"), "{message}");
+        assert!(message.contains("https://example.invalid/x"), "{message}");
     }
 }

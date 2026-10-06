@@ -175,8 +175,10 @@ fn update(exe: &Path, version: &Version) -> anyhow::Result<()> {
     let sums = download(&sums_url)
         .with_context(|| format!("cannot download {sums_url}"))?
         .ok_or_else(|| {
+            // A missing asset and a missing tag both answer 404, so both are named rather than
+            // blaming the release for an asset it may well publish.
             anyhow!(
-                "release v{version} has no SHA256SUMS, so there is nothing to verify the \
+                "release v{version} does not exist, or it has no SHA256SUMS to verify the \
                  download against -- refusing to install it"
             )
         })?;
@@ -190,7 +192,11 @@ fn update(exe: &Path, version: &Version) -> anyhow::Result<()> {
     let archive_url = format!("{base}/{archive_name}");
     let archive = download(&archive_url)
         .with_context(|| format!("cannot download {archive_url}"))?
-        .ok_or_else(|| anyhow!("release v{version} has no {archive_name}"))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "release v{version} does not exist, or it has no {archive_name} for this platform"
+            )
+        })?;
 
     let got = sha256_hex(&archive);
     if got != wanted {
