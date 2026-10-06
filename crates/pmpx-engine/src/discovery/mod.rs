@@ -15,15 +15,15 @@
 //! Walk::config_paths  → [core/.pmpx.toml, repo/.pmpx.toml]  (both are read)
 //! ```
 //!
-//! This file is the walk itself; why it stopped is [`stop`].
+//! This file is the walk itself; why it stopped is [`StopReason`].
 
 use std::path::{Path, PathBuf};
 
-use crate::config::DiscoveryConfig;
+use pmpx_project::DiscoveryConfig;
 
 mod stop;
 
-pub(crate) use stop::dirs;
+pub use stop::dirs;
 pub use stop::StopReason;
 
 /// The directories walked: **from the start outward** (near to far).
@@ -103,7 +103,7 @@ impl Walk {
     /// Collect every `.pmpx.toml` on this walk, **near to far**.
     ///
     /// The stop conditions match [`Walk::project_root`]; this order is the "nearest wins" merge rule
-    /// of [`crate::config::MergedProjectConfig`].
+    /// of [`pmpx_project::MergedProjectConfig`].
     pub fn config_paths(&self) -> Vec<PathBuf> {
         self.dirs
             .iter()

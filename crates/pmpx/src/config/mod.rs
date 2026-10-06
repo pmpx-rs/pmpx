@@ -5,6 +5,5 @@
 //! the host actually names is re-exported -- the crate has the rest.
 
 pub use pmpx_project::{
-    atomic_write, global_config_path, DiscoveryConfig, GlobalConfig, MergedProjectConfig,
-    ProjectConfig,
+    atomic_write, global_config_path, GlobalConfig, MergedProjectConfig, ProjectConfig,
 };

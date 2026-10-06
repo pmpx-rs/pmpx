@@ -19,6 +19,24 @@ which = "8"
 pmpx-plugin.workspace = true
 pmpx-loader.workspace = true
 
+# Configuration tells the walk-up where to stop; the layout of the files is not this crate's business.
+pmpx-project.workspace = true
+# Which plugin a project belongs to: the decision, as data.
+pmpx-detect.workspace = true
+directories = "6"
+
+# The store only: installing, listing and searching plugins. Optional, so an embedder that runs
+# pre-installed plugins never links the HTTP stack the kit drags in.
+crate-plugin-kit = { workspace = true, optional = true }
+anyhow = { version = "1", optional = true }
+# Manifests are TOML; parsing them is the store's job.
+toml = { version = "1", optional = true }
+
+[features]
+default = []
+# What the CLI turns on. The engine itself is happy without it.
+store = ["dep:crate-plugin-kit", "dep:anyhow", "dep:toml"]
+
 [dev-dependencies]
 tempfile = "3"
 

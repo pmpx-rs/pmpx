@@ -13,7 +13,7 @@ use pmpx_detect::{Candidate, Pins, Preferences};
 use pmpx_plugin::{Family, SelectionReason};
 
 use crate::config::{GlobalConfig, MergedProjectConfig};
-use crate::plugins::PluginSet;
+use pmpx_engine::store::PluginSet;
 
 pub use pmpx_detect::{DetectFailure, FamilyScore, Reason, ScoredPlugin, Selection};
 

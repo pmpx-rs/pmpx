@@ -456,9 +456,15 @@ version = "0.2.1"
 name = "pmpx-engine"
 version = "0.2.1"
 dependencies = [
+ "anyhow",
+ "crate-plugin-kit",
+ "directories",
+ "pmpx-detect",
  "pmpx-loader",
  "pmpx-plugin",
+ "pmpx-project",
  "tempfile",
+ "toml",
  "which",
 ]
 

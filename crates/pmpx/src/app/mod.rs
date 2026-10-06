@@ -16,12 +16,12 @@ use crate::cli::Cli;
 use crate::config::{GlobalConfig, MergedProjectConfig};
 use crate::debug;
 use crate::detect::{self, DetectFailure, FamilyScore, Selection};
-use crate::discovery::{self, StopReason, Walk};
 use crate::error::PmpxError;
-use crate::plugins::InstalledPlugin;
-use crate::plugins::PluginSet;
 use crate::runtime::{Backend, Levels, PluginIdentity};
 use crate::style;
+use pmpx_engine::discovery::{self, StopReason, Walk};
+use pmpx_engine::store::InstalledPlugin;
+use pmpx_engine::store::PluginSet;
 
 mod flow;
 
@@ -113,7 +113,7 @@ impl Session {
         debug::done("session.walk", t, || {
             format!(
                 "{}, stopped because: {}",
-                crate::discovery::dirs(walk.dirs.len()),
+                pmpx_engine::discovery::dirs(walk.dirs.len()),
                 walk.stopped.describe(discovery_cfg.max_depth)
             )
         });
@@ -167,7 +167,7 @@ impl Session {
         // "barely searched at all"
         msg.push_str(&format!(
             "\nWalked up {}, stopped because: {}.",
-            crate::discovery::dirs(self.walk.dirs.len()),
+            pmpx_engine::discovery::dirs(self.walk.dirs.len()),
             self.walk.stopped.describe(self.global.discovery.max_depth)
         ));
 

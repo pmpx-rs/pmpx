@@ -79,7 +79,7 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
     anstream::println!(
         "{}  {}, stopped because: {}",
         style::label(12, "Walk-up"),
-        crate::discovery::dirs(session.walk.dirs.len()),
+        pmpx_engine::discovery::dirs(session.walk.dirs.len()),
         session
             .walk
             .stopped

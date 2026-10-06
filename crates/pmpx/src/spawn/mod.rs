@@ -56,9 +56,8 @@ pub fn run(spec: &CommandSpec, cwd: &Path) -> Result<u8> {
                 None => format!("{kind:?}"),
             });
         }
-        Event::Starting { program, .. } => {
+        Event::Starting { .. } => {
             running_at = Some(Instant::now());
-            let _ = program;
         }
         Event::Finished { code } => {
             let t = running_at.or(resolved_at).unwrap_or(started);
@@ -68,8 +67,11 @@ pub fn run(spec: &CommandSpec, cwd: &Path) -> Result<u8> {
         // shown, not swallowed: a silently changed exit code is exactly what a script would trip over.
         Event::Warning(text) => note_line(text),
         Event::Error(text) => error_line(text),
-        // Nothing else can arrive here: this crate runs a command, and a plugin is not involved.
-        Event::Note(_) | Event::PluginMessage { .. } => {}
+        // Nothing else can arrive here: this runs a command, and no plugin is involved.
+        Event::Note(_)
+        | Event::PluginMessage { .. }
+        | Event::Phase { .. }
+        | Event::Notes { .. } => {}
     };
 
     match pmpx_engine::run(&plan, cwd, &mut render) {

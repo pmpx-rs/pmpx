@@ -3,9 +3,9 @@
 //! This module only reads `~/.pmpx/plugins/*/pmpx-plugin.toml` into structs and **loads no dynamic
 //! library** — detection must still give an answer when a plugin is broken / ABI-mismatched /
 //! built for another platform. Loading happens only after a plugin has been selected
-//! (see [`crate::runtime`]).
+//! (see [`crate::Backend`]).
 //!
-//! This file is the installed set and what one entry means; [`manifest`] is the one place that
+//! This file is the installed set and what one entry means; [`manifest`](self) is the one place that
 //! turns an entry's manifest into those fields.
 
 use std::path::{Path, PathBuf};

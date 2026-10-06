@@ -45,6 +45,40 @@ pub fn render(plugin: &str, event: Event) -> Rendered {
             Rendered::Shown
         }
 
+        // One phase of the run, in the same shape as the host's own phases so a trace reads as one
+        // column.
+        Event::Phase {
+            name,
+            micros,
+            detail,
+        } => {
+            debug::phase(name, micros, detail);
+            Rendered::Shown
+        }
+
+        // The decision's notes: what tied, and how to override the choice.
+        Event::Notes { plugin, notes } => {
+            for note in &notes {
+                anstream::eprintln!(
+                    "{}",
+                    crate::style::paint(crate::style::DIM, format!("pmpx: {note}"))
+                );
+            }
+            if !notes.is_empty() {
+                anstream::eprintln!(
+                    "{}",
+                    crate::style::paint(
+                        crate::style::DIM,
+                        format!(
+                            "pmpx: override it for one run with `pmpx -p <name>`, or pin it in \
+                             .pmpx.toml with `pmpx plugin set {plugin}`"
+                        )
+                    )
+                );
+            }
+            Rendered::Shown
+        }
+
         // The execution events are rendered where the run is, by `spawn::run`'s own sink.
         Event::Resolved { .. } | Event::Starting { .. } | Event::Finished { .. } => {
             Rendered::NotShown

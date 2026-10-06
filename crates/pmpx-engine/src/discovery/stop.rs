@@ -35,7 +35,7 @@ impl StopReason {
 ///
 /// Every count around here is routinely 1, and "Walked up 1 directories" is exactly the kind of
 /// thing users report as a bug.
-pub(crate) fn dirs(n: usize) -> String {
+pub fn dirs(n: usize) -> String {
     format!("{n} director{}", if n == 1 { "y" } else { "ies" })
 }
 

@@ -17,6 +17,28 @@ pub enum EngineError {
     /// searched, and it is the part a person needs to see.
     NotFound(String),
 
+    /// The user asked for something impossible (`-C` at a directory that is not there).
+    Usage(String),
+
+    /// The setup could not be completed: the store, the manifest list, the project root.
+    Setup(String),
+
+    /// No project type was detected, or the pinned plugin cannot answer. Exit code 3.
+    NoProject(String),
+
+    /// The decision refused to choose, with the reason the decision crate reported.
+    Detect(pmpx_detect::DetectFailure),
+
+    /// The plugin answered that it cannot do this.
+    Call {
+        /// The plugin's name.
+        plugin: String,
+        /// The verb it refused.
+        verb: String,
+        /// What it said.
+        error: pmpx_loader::CallError,
+    },
+
     /// It was found, and starting it failed anyway.
     Start {
         /// The program, as it was about to be started.
@@ -35,7 +57,16 @@ impl EngineError {
     /// The full explanation, for whoever is showing it.
     pub fn message(&self) -> String {
         match self {
-            Self::NotFound(message) => message.clone(),
+            Self::NotFound(message) | Self::Usage(message) | Self::Setup(message) => {
+                message.clone()
+            }
+            Self::NoProject(message) => message.clone(),
+            Self::Detect(failure) => failure.message(),
+            Self::Call {
+                plugin,
+                verb,
+                error,
+            } => format!("plugin {plugin} cannot do `{verb}`: {error}"),
             Self::Start { program, source } => {
                 format!("failed to start {}: {source}", program.to_string_lossy())
             }
@@ -45,14 +76,17 @@ impl EngineError {
     /// The program this is about, when there is one.
     pub fn program(&self) -> Option<&OsStr> {
         match self {
-            Self::NotFound(_) => None,
             Self::Start { program, .. } => Some(program),
+            _ => None,
         }
     }
 
     /// Whether this is "there is no such program", which is a setup problem rather than a failure.
     pub fn is_not_found(&self) -> bool {
-        matches!(self, Self::NotFound(_))
+        matches!(
+            self,
+            Self::NotFound(_) | Self::NoProject(_) | Self::Setup(_)
+        )
     }
 }
 
@@ -66,7 +100,7 @@ impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Start { source, .. } => Some(source),
-            Self::NotFound(_) => None,
+            _ => None,
         }
     }
 }

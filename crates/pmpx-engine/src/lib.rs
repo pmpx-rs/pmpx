@@ -35,6 +35,17 @@ mod log;
 mod not_found;
 mod resolve;
 
+pub mod discovery;
+
+/// The plugin store: what is installed, and installing more.
+///
+/// Behind a feature, and **off by default**, because it is the one part of this crate that reaches for
+/// the network and the user's disk: an embedder that only runs commands someone else installed should
+/// not pay for any of it. `crate-plugin-kit` -- and through it `ureq`, `rustls` and `ring` -- appears in
+/// this module and nowhere else in the workspace.
+#[cfg(feature = "store")]
+pub mod store;
+
 pub use backend::{Backend, Call, PluginIdentity};
 pub use command::command_for;
 pub use error::EngineError;
@@ -123,12 +134,8 @@ pub enum Event {
 
     /// About to start it.
     Starting {
-        /// The program that will be started.
-        program: OsString,
-        /// How many arguments it gets.
-        args: usize,
-        /// Where it will run.
-        cwd: PathBuf,
+        /// The whole command line, so a caller can show exactly what runs.
+        plan: Plan,
     },
 
     /// It finished, with this exit code.
@@ -145,6 +152,27 @@ pub enum Event {
 
     /// Something went wrong, which did not stop the run either.
     Error(String),
+
+    /// One phase of the run finished, with how long it took.
+    ///
+    /// The engine measures its own phases so that a caller's trace can attribute the time -- which is
+    /// where a run spends everything that is not the backend's own runtime.
+    Phase {
+        /// The phase's name, stable enough for a caller to key on.
+        name: &'static str,
+        /// How long it took.
+        micros: u128,
+        /// What it did, in one line.
+        detail: String,
+    },
+
+    /// The decision's notes, for whoever shows them: ties, and how to override the choice.
+    Notes {
+        /// The plugin that was selected.
+        plugin: String,
+        /// The notes themselves.
+        notes: Vec<String>,
+    },
 
     /// The plugin said something while it was being called.
     ///
@@ -179,12 +207,7 @@ pub fn run(
         kind: resolved.kind,
     });
 
-    let cwd = plan.working_dir(fallback_cwd).to_path_buf();
-    events(Event::Starting {
-        program: plan.program.clone(),
-        args: plan.args.len(),
-        cwd: cwd.clone(),
-    });
+    events(Event::Starting { plan: plan.clone() });
 
     let mut cmd = command::command_for(plan, fallback_cwd)?;
     let status = cmd.status().map_err(|source| EngineError::Start {
@@ -258,8 +281,11 @@ mod tests {
             "{events:?}"
         );
         assert!(
-            matches!(&events[1], Event::Starting { program, args, cwd }
-                if program == &OsString::from("cargo") && *args == 1 && cwd == tmp.path()),
+            matches!(&events[1], Event::Starting { plan }
+                if plan.program == *"cargo"
+                    && plan.args.len() == 1
+                    && plan.cwd.is_none()
+                    && plan.working_dir(tmp.path()) == tmp.path()),
             "{events:?}"
         );
         assert_eq!(events.last(), Some(&Event::Finished { code: 0 }));

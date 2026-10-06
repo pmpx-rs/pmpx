@@ -30,7 +30,7 @@ pmpx-detect.workspace = true
 pmpx-project.workspace = true
 
 # Executing what a plugin answers: resolution, spawning, exit codes, and the events of a run.
-pmpx-engine.workspace = true
+pmpx-engine = { workspace = true, features = ["store"] }
 
 # General plugin management library: install / load / cross-process lock / cache. An
 # external dependency, consumed by version.

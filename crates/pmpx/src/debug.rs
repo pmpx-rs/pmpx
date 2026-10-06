@@ -79,6 +79,14 @@ pub fn done<D: fmt::Display>(phase: &str, since: Instant, detail: impl FnOnce() 
     emit(phase, since.elapsed(), detail());
 }
 
+/// Report one phase the *engine* measured, in the same shape as this module's own phases.
+pub fn phase(name: &str, micros: u128, detail: impl fmt::Display) {
+    if !is_on() {
+        return;
+    }
+    emit(name, Duration::from_micros(micros as u64), detail);
+}
+
 /// A free-form line, for the header.
 pub fn note(text: impl fmt::Display) {
     if !is_on() {

@@ -13,8 +13,8 @@ use crate::app::Session;
 use crate::cli::{Cli, PluginCommand};
 use crate::detect::{self, ScoredPlugin};
 use crate::error::{PmpxError, EXIT_OK};
-use crate::plugins::InstalledPlugin;
 use crate::style;
+use pmpx_engine::store::InstalledPlugin;
 
 use super::plugin_pin::{plugin_set, plugin_unset};
 use super::plugin_store::{plugin_add, plugin_info, plugin_rm, plugin_search, plugin_update};
