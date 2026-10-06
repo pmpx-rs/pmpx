@@ -93,6 +93,21 @@ impl Backend {
             )));
         }
 
+        // The manifest's own `abi` claim is checked against the library it installed. It is *not* a
+        // hard check: the field is written by whoever published the plugin, and a stale declaration
+        // must not disable a plugin that works. But the two disagreeing means one of them is wrong,
+        // and the manifest is what `plugin list` shows and what a user reads before deciding whether
+        // an update is needed.
+        if let Some(declared) = plugin.abi {
+            if declared != entry.abi_version {
+                crate::error::note_line(format!(
+                    "plugin {} declares ABI {declared} in its manifest, but the library reports \
+                     {}. One of the two is stale; `pmpx plugin update {}` should settle it.",
+                    plugin.crate_name, entry.abi_version, plugin.name
+                ));
+            }
+        }
+
         // The self-reported name must match what the manifest declares
         let self_reported = unsafe { read_plugin_str(entry.name, entry.free_str) };
 

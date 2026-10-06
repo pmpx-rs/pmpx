@@ -161,6 +161,37 @@ fn a_declared_file_that_is_missing_is_absent() {
     assert!(line.contains("declared=none"), "{line}");
 }
 
+/// The manifest's `abi` claim is what pmpx can read *before* loading anything, and what `plugin
+/// list` shows. When it disagrees with the library it installed, one of the two is stale -- said out
+/// loud, but not treated as fatal: the library is what actually runs, and a stale declaration must
+/// not disable a plugin that works.
+#[test]
+fn a_manifest_that_lies_about_its_abi_is_reported_but_still_used() {
+    let lib = crate::support::build_fake_plugin();
+    let sb = Sandbox::new();
+    sb.install_plugin(
+        "pmpx-plugin-fakepm",
+        // The library is built against ABI 2; the manifest claims 1.
+        &crate::support::FAKEPM_MANIFEST.replace("abi     = 2", "abi     = 1"),
+        Some(&lib),
+    );
+    sb.file("fakepm.lock");
+
+    let out = sb.run(&["build"]);
+
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    assert!(
+        stdout_of(&out).contains("pmpx-probe"),
+        "the plugin still has to run: {}",
+        stdout_of(&out)
+    );
+    let err = stderr_of(&out);
+    assert!(
+        err.contains("declares ABI 1") && err.contains("reports 2"),
+        "the disagreement has to be said out loud: {err}"
+    );
+}
+
 /// A `.pmpx.toml` pin is reported to the plugin as the reason it was selected -- the plugin cannot
 /// work that out for itself, and it is also how someone holds a plugin back on purpose.
 #[test]

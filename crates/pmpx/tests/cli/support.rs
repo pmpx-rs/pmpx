@@ -156,7 +156,7 @@ pub(crate) fn build_fake_plugin() -> PathBuf {
         .clone()
 }
 
-const FAKEPM_MANIFEST: &str = r#"
+pub(crate) const FAKEPM_MANIFEST: &str = r#"
 [plugin]
 name    = "fakepm"
 version = "0.1.0"
