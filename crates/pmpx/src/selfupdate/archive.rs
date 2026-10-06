@@ -58,10 +58,19 @@ pub(super) fn extract_from_tar_gz(
             continue;
         }
 
+        // The archive does not get to choose *what kind* of thing lands here. A symlink or hard
+        // link entry named `pmpx` would become a link to somewhere else -- and the
+        // `set_permissions` below would then chmod whatever it points at -- and a directory entry
+        // would reach the swap as a directory. Writing the bytes into a file this code creates
+        // makes the entry type irrelevant. (The zip branch below guards the same way.)
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+
         let dest = dir.join(member);
-        entry
-            .unpack(&dest)
-            .with_context(|| format!("cannot write {}", dest.display()))?;
+        let mut out =
+            fs::File::create(&dest).with_context(|| format!("cannot write {}", dest.display()))?;
+        std::io::copy(&mut entry, &mut out).context("cannot read the archive entry")?;
         return Ok(dest);
     }
 
@@ -191,5 +200,63 @@ mod tests {
 
         assert_eq!(got.parent().unwrap(), tmp.path());
         assert_eq!(std::fs::read(&got).unwrap(), b"somewhere else");
+    }
+
+    /// A `.tar.gz` whose `pmpx` member is a **link** rather than a file.
+    fn tar_gz_with_a_link_named(member: &str) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_link_name("/etc/passwd").unwrap();
+        header.set_cksum();
+        builder
+            .append_data(&mut header, member, std::io::empty())
+            .unwrap();
+        let tar = builder.into_inner().unwrap();
+
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &tar).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    /// The archive does not get to choose the entry *type*: a link named like the binary must not
+    /// be extracted, or the installation would become a link to somewhere else -- and the
+    /// executable-bit chmod after extraction would follow it.
+    #[test]
+    fn a_link_entry_named_like_the_binary_is_refused() {
+        let archive = tar_gz_with_a_link_named("pmpx");
+        let tmp = tempfile::tempdir().unwrap();
+
+        let error = extract_from_tar_gz(&archive, "pmpx", tmp.path()).unwrap_err();
+
+        assert!(
+            error.to_string().contains("does not contain pmpx"),
+            "{error}"
+        );
+        assert!(
+            !tmp.path().join("pmpx").exists(),
+            "a link entry must not create anything at the destination"
+        );
+    }
+
+    /// The same rule on the zip side, where the member is a directory.
+    #[test]
+    fn a_directory_entry_named_like_the_binary_is_refused() {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.add_directory("pmpx.exe", options).unwrap();
+        let archive = writer.finish().unwrap().into_inner();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let error = extract_from_zip(&archive, "pmpx.exe", tmp.path()).unwrap_err();
+
+        assert!(
+            error.to_string().contains("does not contain pmpx.exe"),
+            "{error}"
+        );
+        assert!(!tmp.path().join("pmpx.exe").is_file());
     }
 }
