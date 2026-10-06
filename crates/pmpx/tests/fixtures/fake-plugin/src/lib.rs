@@ -29,6 +29,10 @@ impl PackageManager for FakePm {
         verb: Verb,
         args: &[OsString],
     ) -> Result<CommandSpec, PluginError> {
+        // The end-to-end proof that a plugin's own logging reaches the host: pmpx adds the id, and
+        // only prints it when a trace was asked for.
+        pmpx_plugin::debug!("mapping {verb} with {} matched file(s)", ctx.matched.len());
+
         match verb {
             // A command that is guaranteed to succeed and echo back: the tests assert with it
             // that the root / matched / args crossing the boundary are correct.

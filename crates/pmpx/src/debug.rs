@@ -55,6 +55,14 @@ fn is_on() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+/// Whether the trace is on.
+///
+/// For a caller that has to *decide* something because of it -- which logging level to install into
+/// a plugin, say -- rather than for the trace itself, which checks [`is_on`] as it goes.
+pub fn enabled() -> bool {
+    is_on()
+}
+
 /// A timestamp to hand back to [`done`].
 pub fn now() -> Instant {
     Instant::now()

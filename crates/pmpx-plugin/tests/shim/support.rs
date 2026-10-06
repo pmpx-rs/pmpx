@@ -3,7 +3,7 @@
 
 use std::ffi::OsString;
 
-use pmpx_plugin::abi::{self, PmpxCommand, PmpxPluginV1, PmpxStr};
+use pmpx_plugin::abi::{self, PmpxCommand, PmpxContextV1, PmpxPluginV1, PmpxStr};
 use pmpx_plugin::{CommandSpec, Verb};
 
 use crate::pmpx_plugin_entry_v1;
@@ -25,20 +25,14 @@ pub(crate) fn entry() -> &'static PmpxPluginV1 {
     unsafe { &*pmpx_plugin_entry_v1() }
 }
 
-/// Call `command` once, copy the result into Rust values, then free the plugin's memory per the
-/// contract.
-pub(crate) fn call_command(
-    root: &str,
-    matched: &[&str],
-    verb: Option<Verb>,
-    args: &[&str],
-) -> Result<CommandSpec, u32> {
-    let e = entry();
-
-    let root_s = PmpxStr {
-        ptr: root.as_ptr(),
-        len: root.len(),
-    };
+/// Build the context a host would hand over: the arguments as borrowed views, so it stays valid
+/// for exactly as long as the borrows do.
+pub(crate) fn context<'a>(
+    root: &'a str,
+    matched: &'a [&'a str],
+    verb: u32,
+    args: &'a [&'a str],
+) -> (PmpxContextV1, Vec<PmpxStr>, Vec<PmpxStr>) {
     let matched_raw: Vec<PmpxStr> = matched
         .iter()
         .map(|s| PmpxStr {
@@ -54,24 +48,39 @@ pub(crate) fn call_command(
         })
         .collect();
 
-    let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
+    let mut ctx = PmpxContextV1::empty();
+    ctx.root = PmpxStr {
+        ptr: root.as_ptr(),
+        len: root.len(),
+    };
+    ctx.matched = matched_raw.as_ptr();
+    ctx.matched_len = matched_raw.len();
+    ctx.verb = verb;
+    ctx.args = args_raw.as_ptr();
+    ctx.args_len = args_raw.len();
 
-    // SAFETY: the inputs are allocated by this function and stay alive for the duration of the
-    // call; out points at local writable memory.
+    (ctx, matched_raw, args_raw)
+}
+
+/// Call `command` once, copy the result into Rust values, then free the plugin's memory per the
+/// contract.
+pub(crate) fn call_command(
+    root: &str,
+    matched: &[&str],
+    verb: Option<Verb>,
+    args: &[&str],
+) -> Result<CommandSpec, u32> {
+    let e = entry();
+
     // The verb is either a real number or a deliberately out-of-range one.
     let verb_code = verb.map(Verb::to_abi).unwrap_or(99);
+    let (ctx, _matched_raw, _args_raw) = context(root, matched, verb_code, args);
 
-    let code = unsafe {
-        (e.command)(
-            root_s,
-            matched_raw.as_ptr(),
-            matched_raw.len(),
-            verb_code,
-            args_raw.as_ptr(),
-            args_raw.len(),
-            out.as_mut_ptr(),
-        )
-    };
+    let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
+
+    // SAFETY: the context borrows arrays allocated by this function and stays alive for the call;
+    // out points at local writable memory.
+    let code = unsafe { (e.command)(&ctx as *const PmpxContextV1, out.as_mut_ptr()) };
 
     if code != abi::PMPX_OK {
         return Err(code);

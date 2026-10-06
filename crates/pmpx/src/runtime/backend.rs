@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate_plugin_kit::{CratePluginKit, LoadedPlugin};
 use pmpx_plugin::abi::{
-    self, PmpxCommand, PmpxPluginV1, PmpxStr, ABI_VERSION, PMPX_ERR_INTERNAL,
+    self, PmpxCommand, PmpxContextV1, PmpxPluginV1, PmpxStr, ABI_VERSION, PMPX_ERR_INTERNAL,
     PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_OK,
 };
 use pmpx_plugin::{CommandSpec, Verb};
@@ -31,7 +31,15 @@ pub struct Backend {
 
 impl Backend {
     /// Load one plugin and validate it.
-    pub fn load(kit: &CratePluginKit<PmpxPluginV1>, plugin: &InstalledPlugin) -> Result<Self> {
+    ///
+    /// `host` is the hooks the plugin may log through; the level inside them is what decides how
+    /// much of a plugin's output is ever formatted, and installing them is also what tells the
+    /// plugin it is running under a host at all.
+    pub fn load(
+        kit: &CratePluginKit<PmpxPluginV1>,
+        plugin: &InstalledPlugin,
+        host: &'static abi::PmpxHostV1,
+    ) -> Result<Self> {
         let loaded = kit.load(&plugin.crate_name).map_err(|e| {
             PmpxError::not_found(format!(
                 "failed to load plugin {}: {e}\n\
@@ -83,6 +91,13 @@ impl Backend {
                 plugin.dir.display()
             )));
         }
+
+        // Everything is validated, so the plugin may now be told about its host. This is also what
+        // makes `pmpx_plugin::debug!` reach pmpx instead of falling back to the plugin's own
+        // stderr, and `host.max_level` is what keeps a plugin's notes from being formatted at all
+        // when nobody asked for them.
+        crate::runtime::set_current_plugin(&plugin.name);
+        unsafe { (entry.set_host)(host as *const abi::PmpxHostV1) };
 
         Ok(Self {
             loaded,
@@ -178,25 +193,27 @@ impl Backend {
             cwd: PmpxStr::EMPTY,
         };
 
+        // Everything the host knows about this call, in one struct the plugin reads: the fields it
+        // has nothing for stay empty, which reads as "the host does not know this" rather than as
+        // an error.
+        let mut context = PmpxContextV1::empty();
+        context.root = root;
+        context.matched = matched_raw.as_ptr();
+        context.matched_len = matched_raw.len();
+        context.verb = verb.to_abi();
+        context.args = args_raw.as_ptr();
+        context.args_len = args_raw.len();
+
         let code = {
             let out_ptr = &mut cmd as *mut PmpxCommand;
+            let context_ptr = &context as *const PmpxContextV1;
             // The fallback catch_unwind layer. The main defence is in the plugin-side
             // export! shell.
             abi::guard(move || {
-                // SAFETY: the inputs are allocated by this function and stay alive for the
-                // call; out points to local writable memory. The remaining contract is
-                // stated in the Safety section of `PmpxPluginV1::command`.
-                unsafe {
-                    (entry.command)(
-                        root,
-                        matched_raw.as_ptr(),
-                        matched_raw.len(),
-                        verb.to_abi(),
-                        args_raw.as_ptr(),
-                        args_raw.len(),
-                        out_ptr,
-                    )
-                }
+                // SAFETY: the context and the arrays it points at are allocated by this function
+                // and stay alive for the call; out points to local writable memory. The remaining
+                // contract is stated in the Safety section of `PmpxPluginV1::command`.
+                unsafe { (entry.command)(context_ptr, out_ptr) }
             })
         };
 

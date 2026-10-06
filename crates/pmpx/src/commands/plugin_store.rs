@@ -196,7 +196,7 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
         // The plugin record we already have is enough to load it -- no need to dress it up as a
         // detection result.
-        if let Ok(backend) = Backend::load(&session.kit, p) {
+        if let Ok(backend) = Backend::load(&session.kit, p, session.host_hooks()) {
             let d = backend.diagnostics();
             anstream::println!("Plugin reports");
             anstream::println!(

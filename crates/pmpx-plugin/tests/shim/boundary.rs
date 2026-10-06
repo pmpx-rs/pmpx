@@ -21,21 +21,13 @@ fn non_utf8_input_survives_the_boundary() {
         len: raw.len(),
     };
     let e = entry();
-    let empty: Vec<PmpxStr> = Vec::new();
+    let mut ctx = abi::PmpxContextV1::empty();
+    ctx.root = root;
+    ctx.verb = Verb::Run.to_abi();
     let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
 
-    // SAFETY: called per the ABI, with the inputs valid for the whole call.
-    let code = unsafe {
-        (e.command)(
-            root,
-            empty.as_ptr(),
-            0,
-            Verb::Run.to_abi(),
-            empty.as_ptr(),
-            0,
-            out.as_mut_ptr(),
-        )
-    };
+    // SAFETY: called per the ABI, with the context valid for the whole call.
+    let code = unsafe { (e.command)(&ctx as *const _, out.as_mut_ptr()) };
     assert_eq!(code, abi::PMPX_OK);
 
     // This fake plugin does not look at project_root, so this only proves "it gets in without

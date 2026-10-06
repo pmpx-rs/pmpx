@@ -208,6 +208,33 @@ fn quiet_does_not_turn_the_trace_off() {
     );
 }
 
+/// A plugin's own `debug!` arrives through the host: the host adds the plugin's id, and the line
+/// only appears when a trace was asked for -- which is what keeps `--debug` from being an input
+/// the plugin could branch on, and keeps a plugin's notes out of a normal run entirely.
+#[test]
+fn a_plugins_own_log_line_carries_its_id() {
+    let (sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+
+    let traced = sb.run(&["--debug", "build"]);
+    assert!(traced.status.success(), "{}", stderr_of(&traced));
+    let err = stderr_of(&traced);
+    assert!(
+        err.contains("[fakepm] mapping build"),
+        "the plugin's line should carry its id: {err}"
+    );
+
+    // The same run without the trace: the plugin called `debug!` just the same, and nothing was
+    // printed -- not even a bare message without its id.
+    let plain = sb.run(&["build"]);
+    assert!(plain.status.success(), "{}", stderr_of(&plain));
+    let err = stderr_of(&plain);
+    assert!(
+        !err.contains("mapping build"),
+        "a plugin's notes need --debug: {err}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The exec fallback
 // ---------------------------------------------------------------------------

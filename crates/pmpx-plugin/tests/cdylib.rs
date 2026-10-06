@@ -154,10 +154,6 @@ fn call(
     args: &[&str],
 ) -> Result<(OsString, Vec<OsString>, Option<PathBuf>), u32> {
     let root_bytes = project_root.to_string_lossy().into_owned().into_bytes();
-    let root_s = PmpxStr {
-        ptr: root_bytes.as_ptr(),
-        len: root_bytes.len(),
-    };
 
     let matched_raw: Vec<PmpxStr> = matched
         .iter()
@@ -174,21 +170,22 @@ fn call(
         })
         .collect();
 
+    let mut context = abi::PmpxContextV1::empty();
+    context.root = PmpxStr {
+        ptr: root_bytes.as_ptr(),
+        len: root_bytes.len(),
+    };
+    context.matched = matched_raw.as_ptr();
+    context.matched_len = matched_raw.len();
+    context.verb = verb.to_abi();
+    context.args = args_raw.as_ptr();
+    context.args_len = args_raw.len();
+
     let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
 
-    // SAFETY: the inputs are allocated by this function and stay alive for the duration of the
-    // call; out points at local writable memory.
-    let code = unsafe {
-        (entry.command)(
-            root_s,
-            matched_raw.as_ptr(),
-            matched_raw.len(),
-            verb.to_abi(),
-            args_raw.as_ptr(),
-            args_raw.len(),
-            out.as_mut_ptr(),
-        )
-    };
+    // SAFETY: the context borrows arrays allocated by this function and stays alive for the call;
+    // out points at local writable memory.
+    let code = unsafe { (entry.command)(&context as *const _, out.as_mut_ptr()) };
 
     if code != abi::PMPX_OK {
         return Err(code);

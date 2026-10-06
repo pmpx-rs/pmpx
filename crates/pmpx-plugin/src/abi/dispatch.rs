@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use crate::{CommandSpec, Context, PackageManager, Verb};
 
 use super::marshal::{free_str, leak_bytes, leak_str, os_to_bytes, read_os, read_str};
-use super::types::{PmpxCommand, PmpxStr, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_OK};
+use super::types::{
+    PmpxCommand, PmpxContextV1, PmpxStr, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_OK,
+};
 
 /// What `name` / `family` answer when the plugin panicked before it could answer at all.
 ///
@@ -71,28 +73,31 @@ pub unsafe fn free_command(c: *mut PmpxCommand) {
     }
 }
 
-/// All the wiring of one `command` call: read the inputs, call
+/// All the wiring of one `command` call: read the context, call
 /// [`crate::PackageManager::command`], write the output.
 /// This logic lives here rather than in the `export!` macro so that it can be tested directly.
 /// # Safety
 /// See the Safety section of [`PmpxPluginV1::command`](crate::abi::PmpxPluginV1::command). In
 /// addition, `plugin` must be a valid instance in this process.
-#[allow(clippy::too_many_arguments)]
 pub unsafe fn dispatch_command(
     plugin: &dyn PackageManager,
-    project_root: PmpxStr,
-    matched: *const PmpxStr,
-    matched_len: usize,
-    verb: u32,
-    args: *const PmpxStr,
-    args_len: usize,
+    context: *const PmpxContextV1,
     out: *mut PmpxCommand,
 ) -> u32 {
-    if out.is_null() {
+    if out.is_null() || context.is_null() {
         return PMPX_ERR_INVALID_ARGS;
     }
 
-    let Some(verb) = Verb::from_abi(verb) else {
+    // SAFETY: non-null, and the contract has the host keeping it read-only for this call.
+    let context = unsafe { &*context };
+
+    // The host says how much of the struct it built. A shorter one means the fields past its end
+    // are not there to read; a longer one is a newer host whose prefix is this one, which is fine.
+    if context.size < std::mem::size_of::<PmpxContextV1>() {
+        return PMPX_ERR_INVALID_ARGS;
+    }
+
+    let Some(verb) = Verb::from_abi(context.verb) else {
         return PMPX_ERR_INVALID_ARGS;
     };
 
@@ -101,16 +106,18 @@ pub unsafe fn dispatch_command(
     // real pointer -- it builds both arrays from `Vec`s -- but the whole point of this shell is not
     // to assume that. (A length *larger* than the caller's array cannot be detected here, which is
     // why the `command` contract puts that on the caller.)
-    if (matched_len > 0 && matched.is_null()) || (args_len > 0 && args.is_null()) {
+    if (context.matched_len > 0 && context.matched.is_null())
+        || (context.args_len > 0 && context.args.is_null())
+    {
         return PMPX_ERR_INVALID_ARGS;
     }
 
-    let project_root = PathBuf::from(unsafe { read_os(project_root) });
+    let project_root = PathBuf::from(unsafe { read_os(context.root) });
 
     // `matched` is text (file names declared in the manifest), so UTF-8 is checked here.
-    let mut matched_names = Vec::with_capacity(matched_len);
-    for i in 0..matched_len {
-        let raw = unsafe { *matched.add(i) };
+    let mut matched_names = Vec::with_capacity(context.matched_len);
+    for i in 0..context.matched_len {
+        let raw = unsafe { *context.matched.add(i) };
         match unsafe { read_str(raw) } {
             Ok(s) => matched_names.push(s.to_string()),
             Err(code) => return code,
@@ -118,18 +125,29 @@ pub unsafe fn dispatch_command(
     }
 
     // `args` are arguments and may be arbitrary bytes -- converted to OsString as-is, losslessly.
-    let mut arg_list = Vec::with_capacity(args_len);
-    for i in 0..args_len {
-        let raw = unsafe { *args.add(i) };
+    let mut arg_list = Vec::with_capacity(context.args_len);
+    for i in 0..context.args_len {
+        let raw = unsafe { *context.args.add(i) };
         arg_list.push(unsafe { read_os(raw) });
     }
 
-    let ctx = Context {
+    let context = Context {
         project_root,
         matched: matched_names,
     };
 
-    match plugin.command(&ctx, verb, &arg_list) {
+    // Bracketed so that anything the plugin logs can say what it was working with -- and so that a
+    // plugin logging outside a call finds nothing rather than a stale one.
+    let answer = crate::debug::with_call(
+        crate::debug::Call {
+            context: context.clone(),
+            verb,
+            args_len: arg_list.len(),
+        },
+        || plugin.command(&context, verb, &arg_list),
+    );
+
+    match answer {
         Ok(spec) => {
             unsafe { write_command(out, spec) };
             PMPX_OK

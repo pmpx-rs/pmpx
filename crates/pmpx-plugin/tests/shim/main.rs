@@ -16,6 +16,7 @@ use pmpx_plugin::{CommandSpec, Context, Family, PackageManager, PluginError, Ver
 
 mod boundary;
 mod errors;
+mod logging;
 mod mapping;
 mod support;
 mod vtable;
@@ -56,6 +57,15 @@ impl PackageManager for Toy {
         // Leave an entry that always panics, to verify guard
         if args.iter().any(|a| a == "panic") {
             panic!("this panic must be caught by guard");
+        }
+
+        // The switches the logging tests pull. Same idea as "panic" above: reachable through the
+        // ABI only, so nothing else in the suite starts printing.
+        if args.iter().any(|a| a == "log") {
+            pmpx_plugin::debug!("toy logged for {verb}");
+        }
+        if args.iter().any(|a| a == "context") {
+            pmpx_plugin::debug::context();
         }
 
         match verb {

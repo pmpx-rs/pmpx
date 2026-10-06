@@ -160,7 +160,7 @@ const FAKEPM_MANIFEST: &str = r#"
 [plugin]
 name    = "fakepm"
 version = "0.1.0"
-abi     = 1
+abi     = 2
 family  = "faketest"
 
 [detect]

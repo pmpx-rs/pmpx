@@ -6,7 +6,8 @@
 //! `pmpx plugin set/unset`). Merge rule: **nearest wins**.
 //!
 //! This file is the global file and the types it is made of; [`paths`] says where the files live,
-//! [`project`] holds `.pmpx.toml` and its layered merge, and [`write`] is how either of them is
+//! [`project`] holds `.pmpx.toml` and its layered merge, and [`write`](mod@write) is how either of
+//! them is
 //! written back.
 
 use std::path::{Path, PathBuf};

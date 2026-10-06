@@ -17,10 +17,12 @@
 
 mod backend;
 mod error;
+mod log;
 mod strings;
 
 pub use backend::Backend;
 pub use error::BackendError;
+pub(crate) use log::{hooks, set_current_plugin};
 
 /// What the plugin reports about itself, as shown by `pmpx info`.
 #[derive(Debug, Clone, PartialEq, Eq)]

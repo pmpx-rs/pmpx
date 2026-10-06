@@ -43,33 +43,20 @@ macro_rules! export {
 
         #[doc(hidden)]
         unsafe extern "C" fn __pmpx_command(
-            project_root: $crate::abi::PmpxStr,
-            matched: *const $crate::abi::PmpxStr,
-            matched_len: ::std::primitive::usize,
-            verb: ::std::primitive::u32,
-            args: *const $crate::abi::PmpxStr,
-            args_len: ::std::primitive::usize,
+            context: *const $crate::abi::PmpxContextV1,
             out: *mut $crate::abi::PmpxCommand,
         ) -> ::std::primitive::u32 {
             // `guard` is not optional: a panic crossing the `extern "C"` boundary aborts the
             // process and the host cannot save it.
             $crate::abi::guard(move || {
                 let plugin = __pmpx_instance();
+                // Remember the plugin's own name for the case where no host installed hooks (a
+                // plugin's own tests): the host path never needs it, since the host knows its id.
+                $crate::debug::remember_name(plugin.name());
                 // SAFETY: the validity of the arguments and of out is guaranteed by the caller
                 // (the host) under the `PmpxPluginV1::command` contract; this just hands them to
                 // an implementation under that same contract.
-                unsafe {
-                    $crate::abi::dispatch_command(
-                        &*plugin,
-                        project_root,
-                        matched,
-                        matched_len,
-                        verb,
-                        args,
-                        args_len,
-                        out,
-                    )
-                }
+                unsafe { $crate::abi::dispatch_command(&*plugin, context, out) }
             })
         }
 
@@ -77,6 +64,11 @@ macro_rules! export {
         // ever drift, this stops compiling instead of becoming a call through the wrong function
         // type (which `ABI_VERSION` cannot catch, because it would not change).
         const _: $crate::abi::CommandFn = __pmpx_command;
+
+        #[doc(hidden)]
+        unsafe extern "C" fn __pmpx_set_host(host: *const $crate::abi::PmpxHostV1) {
+            $crate::debug::set_host(host);
+        }
 
         #[doc(hidden)]
         unsafe extern "C" fn __pmpx_free_str(s: $crate::abi::PmpxStr) {
@@ -101,6 +93,7 @@ macro_rules! export {
             name: __pmpx_name,
             family: __pmpx_family,
             command: __pmpx_command,
+            set_host: __pmpx_set_host,
             free_str: __pmpx_free_str,
             free_command: __pmpx_free_command,
         };

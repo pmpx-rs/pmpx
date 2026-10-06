@@ -1,6 +1,6 @@
 //! The error codes the host distinguishes, and the panic guard.
 
-use pmpx_plugin::abi::{self, PmpxStr};
+use pmpx_plugin::abi;
 use pmpx_plugin::Verb;
 
 use crate::support::{call_command, entry};
@@ -25,24 +25,11 @@ fn an_unknown_verb_number_is_rejected() {
 #[test]
 fn a_null_out_pointer_is_rejected() {
     let e = entry();
-    let root = PmpxStr {
-        ptr: "/proj".as_ptr(),
-        len: 5,
-    };
-    let empty: Vec<PmpxStr> = Vec::new();
+    let (ctx, _matched_raw, _args_raw) =
+        crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
 
     // SAFETY: null is passed on purpose here, precisely so that it gets rejected.
-    let code = unsafe {
-        (e.command)(
-            root,
-            empty.as_ptr(),
-            0,
-            Verb::Install.to_abi(),
-            empty.as_ptr(),
-            0,
-            std::ptr::null_mut(),
-        )
-    };
+    let code = unsafe { (e.command)(&ctx as *const _, std::ptr::null_mut()) };
     assert_eq!(code, abi::PMPX_ERR_INVALID_ARGS);
 }
 
@@ -66,27 +53,19 @@ fn a_panicking_plugin_does_not_take_the_host_down() {
 #[test]
 fn a_null_array_with_a_length_is_rejected() {
     let e = entry();
-    let root = "/proj";
-    let root_s = PmpxStr {
-        ptr: root.as_ptr(),
-        len: root.len(),
-    };
     let mut out = std::mem::MaybeUninit::<pmpx_plugin::abi::PmpxCommand>::uninit();
 
     for (matched_len, args_len) in [(0, 1), (1, 0)] {
+        let (mut ctx, _matched_raw, _args_raw) =
+            crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
+        ctx.matched = std::ptr::null();
+        ctx.matched_len = matched_len;
+        ctx.args = std::ptr::null();
+        ctx.args_len = args_len;
+
         // SAFETY: `out` is writable, and the null arrays are exactly what is being rejected --
         // nothing on this side reads them.
-        let code = unsafe {
-            (e.command)(
-                root_s,
-                std::ptr::null(),
-                matched_len,
-                Verb::Install.to_abi(),
-                std::ptr::null(),
-                args_len,
-                out.as_mut_ptr(),
-            )
-        };
+        let code = unsafe { (e.command)(&ctx as *const _, out.as_mut_ptr()) };
 
         assert_eq!(
             code,
@@ -94,4 +73,20 @@ fn a_null_array_with_a_length_is_rejected() {
             "matched_len {matched_len}, args_len {args_len} should be rejected"
         );
     }
+}
+
+/// A context the host built smaller than this plugin knows is refused rather than read past its
+/// end -- the `size` field is exactly what makes that decidable.
+#[test]
+fn a_context_smaller_than_this_build_is_rejected() {
+    let e = entry();
+    let (mut ctx, _matched_raw, _args_raw) =
+        crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
+    ctx.size -= 1;
+    let mut out = std::mem::MaybeUninit::<pmpx_plugin::abi::PmpxCommand>::uninit();
+
+    // SAFETY: the context is valid apart from the size it claims, which is the point.
+    let code = unsafe { (e.command)(&ctx as *const _, out.as_mut_ptr()) };
+
+    assert_eq!(code, abi::PMPX_ERR_INVALID_ARGS);
 }

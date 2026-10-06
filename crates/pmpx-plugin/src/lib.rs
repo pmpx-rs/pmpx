@@ -19,6 +19,16 @@
 //! file reads to probe things it should not know -- "what the project looks like" is decided by
 //! the host's detect layer and handed to the plugin through `matched`, a declarative, auditable
 //! allowlist.
+//! # Saying something
+//!
+//! A plugin that wants to explain itself calls [`debug!`](macro@crate::debug) /
+//! [`info!`](macro@crate::info) / [`warn!`](macro@crate::warn) / [`error!`](macro@crate::error),
+//! and the host decides what to print, adding the plugin's id. That is not only tidier than
+//! printing directly: since the *host* holds the switch, `--debug` never becomes an input a plugin
+//! could branch on, so a debug run executes the same command as any other. See
+//! [`debug`](mod@crate::debug) for the details, including what happens with no host installed (a
+//! plugin's own `cargo test`).
+//!
 //! Data crossing [`abi`] is always `#[repr(C)]` POD, so the two sides need not share a rustc; see
 //! the module docs of [`abi`].
 //!
@@ -30,6 +40,7 @@
 #![warn(clippy::all)]
 
 pub mod abi;
+pub mod debug;
 
 mod context;
 mod error;

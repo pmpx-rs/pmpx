@@ -215,6 +215,15 @@ impl Session {
         PmpxError::not_found(msg)
     }
 
+    /// What a plugin's logging reaches for this run.
+    ///
+    /// The level is decided once, here: `--quiet` asks for the least, `--debug` for the most, and a
+    /// plain run sits between them so that a plugin's warnings still get through while its notes
+    /// do not.
+    pub fn host_hooks(&self) -> &'static pmpx_plugin::abi::PmpxHostV1 {
+        crate::runtime::hooks(self.quiet, debug::enabled())
+    }
+
     /// Resolve which plugin to use.
     pub fn select(&self, root: &Path) -> std::result::Result<Selection, DetectFailure> {
         detect::select(
@@ -279,7 +288,7 @@ impl Session {
         };
 
         let t = debug::now();
-        let backend = Backend::load(&self.kit, plugin);
+        let backend = Backend::load(&self.kit, plugin, self.host_hooks());
         debug::done("backend.load", t, || match &backend {
             Ok(_) => plugin.crate_name.clone(),
             Err(e) => format!("{} FAILED: {e}", plugin.crate_name),

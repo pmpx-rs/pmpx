@@ -8,10 +8,36 @@
 // ---- Version ----
 
 /// Version of the cross-boundary layout, an independent integer, fully decoupled from the crate
-/// version. Bump it by one only when the shape of [`PmpxPluginV1`] / [`PmpxCommand`] / [`PmpxStr`],
-/// the verb numbering, or the error-code semantics really change. The host uses it as its only
-/// hard check and refuses to load when it does not match.
-pub const ABI_VERSION: u32 = 1;
+/// version. Bump it by one only when the shape of [`PmpxPluginV1`] / [`PmpxContextV1`] /
+/// [`PmpxCommand`] / [`PmpxStr`], the verb numbering, or the error-code semantics really change.
+/// The host uses it as its only hard check and refuses to load when it does not match.
+///
+/// **2**: the plugin is handed a [`PmpxContextV1`] instead of four loose arrays, and a host-hooks
+/// pointer ([`PmpxHostV1`]) it can log through.
+pub const ABI_VERSION: u32 = 2;
+
+// ---- Message levels ----
+//
+// What a plugin's `debug!` / `info!` / `warn!` / `error!` arrive as on the host side. The numbers
+// are ordered, so "print this level and everything louder" is a comparison.
+
+/// Something went wrong.
+pub const PMPX_LEVEL_ERROR: u32 = 0;
+/// Something is off, but the command still runs.
+pub const PMPX_LEVEL_WARN: u32 = 1;
+/// An ordinary note about what the plugin decided.
+pub const PMPX_LEVEL_INFO: u32 = 2;
+/// Detail for someone debugging.
+pub const PMPX_LEVEL_DEBUG: u32 = 3;
+
+// ---- Why this plugin was selected ----
+
+/// It won on evidence (`score`).
+pub const PMPX_REASON_SCORED: u32 = 0;
+/// `.pmpx.toml` pins its family to it.
+pub const PMPX_REASON_PINNED: u32 = 1;
+/// `-p/--plugin` named it.
+pub const PMPX_REASON_EXPLICIT: u32 = 2;
 
 // ---- Error codes ----
 
@@ -121,15 +147,169 @@ unsafe impl Sync for PmpxCommand {}
 /// Spelled out once so the vtable field, the `export!` shell and the dispatcher cannot drift
 /// apart. A mismatch would mean the host calling a function of a different shape -- undefined
 /// behaviour that `ABI_VERSION` cannot catch, because the version would not change.
-pub type CommandFn = unsafe extern "C" fn(
-    project_root: PmpxStr,
-    matched: *const PmpxStr,
-    matched_len: usize,
-    verb: u32,
-    args: *const PmpxStr,
-    args_len: usize,
-    out: *mut PmpxCommand,
-) -> u32;
+///
+/// Everything the host has to say arrives in the [`PmpxContextV1`]: one pointer, so a future field
+/// is a change to that struct alone and never to this signature again.
+pub type CommandFn =
+    unsafe extern "C" fn(context: *const PmpxContextV1, out: *mut PmpxCommand) -> u32;
+
+/// The host's hooks: what a plugin may call back into.
+///
+/// The plugin never owns this struct -- the host keeps one `'static` and hands over a pointer that
+/// stays valid for the life of the process.
+#[repr(C)]
+pub struct PmpxHostV1 {
+    /// Size of this struct as the **host** built it. A plugin must not read past it.
+    pub size: usize,
+
+    /// Print one message. The host adds the prefix, the plugin's id, and decides whether to print
+    /// at all -- a plugin does not know its own id as the host sees it, and must not have to.
+    ///
+    /// # Safety
+    /// `message` must be valid for the duration of this call; the host may not keep it. Nothing is
+    /// handed back, so there is no ownership to settle.
+    pub log: unsafe extern "C" fn(level: u32, message: PmpxStr),
+
+    /// The loudest level the host will actually print. A plugin checks this **before** formatting
+    /// anything, which is what makes a silent host cost nothing.
+    pub max_level: u32,
+}
+
+impl PmpxHostV1 {
+    /// The hooks one host installs, together with the level it is willing to print.
+    pub const fn new(log: unsafe extern "C" fn(u32, PmpxStr), max_level: u32) -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            log,
+            max_level,
+        }
+    }
+}
+
+/// One `family = "plugin"` pin from a `.pmpx.toml`.
+#[repr(C)]
+pub struct PmpxPin {
+    /// Family name, the same key `.pmpx.toml` uses.
+    pub family: PmpxStr,
+    /// The plugin that family is pinned to.
+    pub plugin: PmpxStr,
+}
+
+/// One `key = "value"` pair -- the project config's `[scripts]`, which the host parses and does not
+/// interpret.
+#[repr(C)]
+pub struct PmpxKeyValue {
+    /// Key.
+    pub key: PmpxStr,
+    /// Value.
+    pub value: PmpxStr,
+}
+
+/// The contents of one file a plugin asked for in its manifest's `[context] files`.
+#[repr(C)]
+pub struct PmpxFile {
+    /// Path relative to the project root, as the manifest declared it.
+    pub name: PmpxStr,
+    /// The bytes, which need not be UTF-8: how to read them is the plugin's business.
+    pub contents: PmpxStr,
+    /// Non-zero when the file was larger than the host's limit, so `contents` is only its
+    /// beginning.
+    pub truncated: u32,
+}
+
+/// Everything the host knows about this call.
+///
+/// `size` comes first so a plugin built against an older, smaller context can tell how much of it
+/// is really there -- and so a future host can grow the struct without this becoming a question
+/// the plugin has to guess at.
+///
+/// **A field the host has nothing for is null (or zero).** That is "absent", not an error: a
+/// different host may not know about pins, and a plugin must cope.
+#[repr(C)]
+pub struct PmpxContextV1 {
+    /// Size of this struct as the **host** built it. Read it before anything past the fields this
+    /// plugin was compiled with.
+    pub size: usize,
+
+    /// Project root: where the command will run, unless the answer names a `cwd` of its own.
+    pub root: PmpxStr,
+
+    /// The directory the person ran pmpx from (its `-C`, or the process's own directory). It
+    /// differs from `root` whenever the project root was found by walking up, which is the only
+    /// way to tell which package of a monorepo this is.
+    ///
+    /// **Not** where the command will run: that is the `cwd` of the answer, and it defaults to
+    /// `root`. Calling this field `cwd` would invite exactly that confusion.
+    pub start_dir: PmpxStr,
+
+    /// The files this plugin's detection matched, relative to `root`.
+    pub matched: *const PmpxStr,
+    /// Number of elements in `matched`.
+    pub matched_len: usize,
+
+    /// The verb, numbered as [`VERB_INSTALL`] and friends.
+    pub verb: u32,
+
+    /// Why this plugin was selected: [`PMPX_REASON_SCORED`] and friends.
+    pub reason: u32,
+
+    /// The evidence score it won with (0 when it was pinned or named outright).
+    pub score: u32,
+
+    /// The arguments, as the person typed them.
+    pub args: *const PmpxStr,
+    /// Number of elements in `args`.
+    pub args_len: usize,
+
+    /// `[plugin]` pins from the project config, nearest layer wins.
+    pub pins: *const PmpxPin,
+    /// Number of elements in `pins`.
+    pub pins_len: usize,
+
+    /// The `.pmpx.toml` files that were read, nearest first.
+    pub config_paths: *const PmpxStr,
+    /// Number of elements in `config_paths`.
+    pub config_paths_len: usize,
+
+    /// `[scripts]` from those files.
+    pub scripts: *const PmpxKeyValue,
+    /// Number of elements in `scripts`.
+    pub scripts_len: usize,
+
+    /// What this plugin asked to see in its manifest's `[context] files`.
+    pub files: *const PmpxFile,
+    /// Number of elements in `files`.
+    pub files_len: usize,
+}
+
+impl PmpxContextV1 {
+    /// A context with every field absent, sized for this build.
+    ///
+    /// The host fills in what it has; whatever it leaves alone reads as "the host does not know
+    /// this", which is exactly what a null field means.
+    pub const fn empty() -> Self {
+        Self {
+            size: std::mem::size_of::<Self>(),
+            root: PmpxStr::EMPTY,
+            start_dir: PmpxStr::EMPTY,
+            matched: std::ptr::null(),
+            matched_len: 0,
+            verb: 0,
+            reason: PMPX_REASON_SCORED,
+            score: 0,
+            args: std::ptr::null(),
+            args_len: 0,
+            pins: std::ptr::null(),
+            pins_len: 0,
+            config_paths: std::ptr::null(),
+            config_paths_len: 0,
+            scripts: std::ptr::null(),
+            scripts_len: 0,
+            files: std::ptr::null(),
+            files_len: 0,
+        }
+    }
+}
 
 /// The only struct a plugin exports, and it is that table of function pointers; once the host has
 /// obtained it, every interaction goes through these pointers, with no trait object and none of
@@ -156,21 +336,32 @@ pub struct PmpxPluginV1 {
     /// [`free_str`](crate::abi::free_str) after reading.
     pub family: unsafe extern "C" fn() -> PmpxStr,
 
-    /// Translate "verb + arguments" into one command. When it returns [`PMPX_OK`], `out` has been
-    /// filled in and the host calls [`free_command`](crate::abi::free_command) when done; otherwise
-    /// it returns `PMPX_ERR_*` and `out` is untouched.
+    /// Translate one call into one command. When it returns [`PMPX_OK`], `out` has been filled in
+    /// and the host calls [`free_command`](crate::abi::free_command) when done; otherwise it returns
+    /// `PMPX_ERR_*` and `out` is untouched.
     ///
     /// # Safety
-    /// - `project_root` / `matched` / `args` must be allocated by the host, valid and read-only
-    ///   for the duration of the call;
-    /// - `matched_len` / `args_len` must be the real lengths of those arrays -- a length larger
-    ///   than the array cannot be detected on this side, unlike a null pointer with a length,
-    ///   which is rejected with [`PMPX_ERR_INVALID_ARGS`];
+    /// - `context` must point at a [`PmpxContextV1`] the host built, with `size` set to the size it
+    ///   built, valid and read-only for the duration of the call;
+    /// - every array the context points at must have at least the length it declares -- a length
+    ///   larger than the array cannot be detected on this side, unlike a null pointer with a
+    ///   length, which is rejected with [`PMPX_ERR_INVALID_ARGS`];
     /// - `out` must point at a writable [`PmpxCommand`];
     /// - a panic must not cross this boundary: since Rust 1.81, unwinding across `extern "C"`
     ///   aborts the process and the host's `catch_unwind` cannot save it, so `export!` wraps every
     ///   shim -- this one and the `name` / `family` ones -- in `catch_unwind`.
     pub command: CommandFn,
+
+    /// Hand the plugin the host's hooks.
+    ///
+    /// Called once after loading, before any other call except the ones that read `name` /
+    /// `family`. Passing null detaches them, and the plugin then falls back to writing its own
+    /// messages to stderr.
+    ///
+    /// # Safety
+    /// `host` must point at a [`PmpxHostV1`] that stays alive, and at functions that stay callable,
+    /// for as long as the plugin may call them -- normally the life of the host process.
+    pub set_host: unsafe extern "C" fn(*const PmpxHostV1),
 
     /// Free the memory held by the values returned from [`PmpxPluginV1::name`] /
     /// [`PmpxPluginV1::family`].
