@@ -56,6 +56,13 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # The engine's store is behind a feature the workspace's default build does not turn on, so
+      # its tests are not compiled by the step above -- and a bug in the store would ship without
+      # this ever going red. Which is not hypothetical: the `-C` path normalization was wrong for
+      # exactly as long as nothing compiled these tests here.
+      - name: Test the engine with its store feature
+        run: cargo test -p pmpx-engine --features store --locked
+
       - name: Docs
         env:
           RUSTDOCFLAGS: -D warnings
