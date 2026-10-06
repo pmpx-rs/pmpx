@@ -5,6 +5,8 @@
 
 use pmpx_plugin::Family;
 
+use std::path::{Path, PathBuf};
+
 use crate::app;
 use crate::cli::Cli;
 use crate::error::{PmpxError, EXIT_OK};
@@ -30,6 +32,35 @@ pub(super) fn plugin_add(
     let mut installed_so_far: Vec<String> = Vec::new();
 
     for name in names {
+        // A path is installed the path way: `plugin add .` in a plugin checkout builds and installs
+        // what is there, which is the development loop. Anything else is a plugin *name*, looked up
+        // on crates.io.
+        if let Some(dir) = checkout_of(name, &session.kit.config().manifest_name) {
+            anstream::println!("Installing {}...", style::paint(style::PM, name));
+            match install_checkout(&session, &dir) {
+                Ok(installed) => {
+                    anstream::println!(
+                        "  {} v{} ({}) -> {}",
+                        installed.crate_name,
+                        style::paint(style::DIM, installed.version),
+                        style::paint(style::DIM, describe_source(&installed.source)),
+                        style::paint(style::DIM, installed.dir.display())
+                    );
+                    installed_so_far.push(installed.crate_name);
+                }
+                Err(e) => {
+                    if !installed_so_far.is_empty() {
+                        crate::error::note_line(format!(
+                            "{name} was not installed; installed before it: {}",
+                            installed_so_far.join(", ")
+                        ));
+                    }
+                    return Err(e);
+                }
+            }
+            continue;
+        }
+
         anstream::println!("Installing {}...", style::paint(style::PM, name));
 
         match session.kit.install(name, version) {
@@ -38,7 +69,7 @@ pub(super) fn plugin_add(
                     "  {} v{} ({}) -> {}",
                     installed.crate_name,
                     style::paint(style::DIM, installed.version),
-                    style::paint(style::DIM, describe_source(installed.source)),
+                    style::paint(style::DIM, describe_source(&installed.source)),
                     style::paint(style::DIM, installed.dir.display())
                 );
                 installed_so_far.push(installed.crate_name);
@@ -57,6 +88,139 @@ pub(super) fn plugin_add(
     }
 
     Ok(EXIT_OK)
+}
+
+/// The checkout a `plugin add` argument names, if it names one.
+///
+/// The rule is what the argument *is*, not how it is spelled: something that resolves to a
+/// directory containing the manifest is a checkout, and everything else is a plugin name. That keeps
+/// `plugin add pnpm` meaning what it always meant, while `plugin add .` and an absolute path in a
+/// plugin repository do the obvious thing.
+///
+/// A path *spelling* that does not resolve is still a path, so the error can say "there is no such
+/// directory" instead of "no such crate on crates.io".
+fn checkout_of(name: &str, manifest: &str) -> Option<PathBuf> {
+    let path = Path::new(name);
+
+    if path.join(manifest).is_file() {
+        return Some(path.to_path_buf());
+    }
+
+    let spelled_like_a_path = name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || path.is_absolute();
+
+    if spelled_like_a_path && path.is_dir() {
+        // A directory, but not a checkout: let the caller report that it is missing the manifest.
+        return Some(path.to_path_buf());
+    }
+
+    None
+}
+
+/// Install one checkout, after checking it is something this host can use.
+fn install_checkout(
+    session: &app::Session,
+    dir: &Path,
+) -> crate::error::Result<crate_plugin_kit::install::Installed> {
+    if !dir.is_dir() {
+        return Err(PmpxError::Usage(format!(
+            "{} is not a directory, so there is no plugin to install from it",
+            dir.display()
+        )));
+    }
+
+    vet_checkout(session, dir)?;
+
+    session
+        .kit
+        .install_from_path(dir)
+        .map_err(|e| PmpxError::Other(e.into()))
+}
+
+/// What the kit cannot check: whether *this host* will be able to use the checkout.
+///
+/// What cannot work is refused. What will silently do nothing is said out loud -- those are the
+/// failures an author would otherwise chase after installing.
+fn vet_checkout(session: &app::Session, dir: &Path) -> crate::error::Result<()> {
+    let manifest_name = &session.kit.config().manifest_name;
+    let manifest_path = dir.join(manifest_name);
+
+    if !manifest_path.is_file() {
+        return Err(PmpxError::Usage(format!(
+            "{} has no {manifest_name}, so it is not a plugin checkout",
+            dir.display()
+        )));
+    }
+
+    let manifest = crate_plugin_kit::PluginManifest::read(&manifest_path)
+        .map_err(|e| PmpxError::Usage(format!("cannot read {}: {e}", manifest_path.display())))?;
+
+    // The one thing that cannot work: a plugin built against another contract version is refused at
+    // `dlopen`, so installing it would only move the failure somewhere less obvious.
+    match manifest.plugin.abi {
+        Some(abi) if abi == pmpx_plugin::abi::PMPX_ABI_MAJOR => {}
+        Some(abi) => {
+            return Err(PmpxError::Usage(format!(
+                "{} declares ABI {abi}, but this pmpx speaks ABI {}.\n\
+                 Rebuild the plugin against pmpx-plugin {}.",
+                dir.display(),
+                pmpx_plugin::abi::PMPX_ABI_MAJOR,
+                env!("CARGO_PKG_VERSION")
+            )))
+        }
+        None => {
+            return Err(PmpxError::Usage(format!(
+                "{} does not declare an abi, so pmpx cannot tell whether it can load it",
+                dir.display()
+            )))
+        }
+    }
+
+    // Everything below makes the plugin quietly do nothing. Saying so now is cheaper than finding
+    // out why it never runs.
+    if manifest.plugin.family.as_deref().unwrap_or("").is_empty() {
+        crate::error::note_line(format!(
+            "{} declares no family, so no project can ever select it",
+            dir.display()
+        ));
+    }
+
+    let markers = markers(&manifest);
+    if markers.is_empty() {
+        crate::error::note_line(format!(
+            "{} declares no [detect] markers, so it will never match a project",
+            dir.display()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Every `[detect]` marker the manifest declares, strong and weak together.
+fn markers(manifest: &crate_plugin_kit::PluginManifest) -> Vec<String> {
+    let mut out = str_array(manifest, "detect", "strong");
+    out.extend(str_array(manifest, "detect", "weak"));
+    out
+}
+
+/// One `[section] key = [...]` out of the host's own sections.
+fn str_array(manifest: &crate_plugin_kit::PluginManifest, section: &str, key: &str) -> Vec<String> {
+    manifest
+        .extra
+        .get(section)
+        .and_then(|section| section.get(key))
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `plugin rm`
@@ -271,10 +435,17 @@ pub(super) fn join_or_dash(items: &[String]) -> String {
     }
 }
 
-pub(super) fn describe_source(source: crate_plugin_kit::cache::InstallSource) -> &'static str {
+/// How a plugin got here, in the words `plugin add` shows.
+///
+/// A local install names the directory it was built from: that is the thing the person
+/// will want to know when they wonder why a plugin does not match what is published.
+pub(super) fn describe_source(source: &crate_plugin_kit::cache::InstallSource) -> String {
+    use crate_plugin_kit::cache::InstallSource;
+
     match source {
-        crate_plugin_kit::cache::InstallSource::Prebuilt => "prebuilt",
-        crate_plugin_kit::cache::InstallSource::BuildHost => "built locally",
+        InstallSource::Prebuilt => "prebuilt".to_string(),
+        InstallSource::BuildHost => "built locally".to_string(),
+        InstallSource::Local { path } => format!("built from {}", path.display()),
     }
 }
 

@@ -1,0 +1,14 @@
+# The manifest of a plugin checkout: what makes a directory a plugin rather than a crate.
+
+[plugin]
+name    = "local"
+version = "0.1.0"
+abi     = 3
+family  = "node"
+
+[detect]
+strong = ["local.lock"]
+weak   = ["local.json"]
+
+[context]
+files = ["local.json"]

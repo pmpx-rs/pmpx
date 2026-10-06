@@ -29,13 +29,12 @@ directories = "6"
 # pre-installed plugins never links the HTTP stack the kit drags in.
 crate-plugin-kit = { workspace = true, optional = true }
 anyhow = { version = "1", optional = true }
-# Manifests are TOML; parsing them is the store's job.
-toml = { version = "1", optional = true }
+# Manifests are read by the kit, host sections included -- nothing here parses TOML.
 
 [features]
 default = []
 # What the CLI turns on. The engine itself is happy without it.
-store = ["dep:crate-plugin-kit", "dep:anyhow", "dep:toml"]
+store = ["dep:crate-plugin-kit", "dep:anyhow"]
 
 [dev-dependencies]
 tempfile = "3"

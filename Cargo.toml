@@ -39,7 +39,7 @@ pmpx-engine = { path = "crates/pmpx-engine", version = "0.3.0" }
 pmpx-testkit = { path = "crates/pmpx-testkit", version = "0.3.0" }
 
 # General plugin management library. An external dependency, consumed by version, not by path.
-crate-plugin-kit = "0.2.0"
+crate-plugin-kit = "0.3.0"
 
 [profile.release]
 # Everything favors fast runtime; slow builds are fine.

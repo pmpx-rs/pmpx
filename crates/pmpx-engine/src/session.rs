@@ -110,6 +110,11 @@ impl Session {
         // the CLI and the contract are always published as the same number.
         kit_cfg.contract_version = options.contract_version;
 
+        // The kit's defaults are derived from the id and say `_v1`; this host speaks v3, and the symbol
+        // is what a plugin exports. The wrapper body needs no change: the derived default already asks
+        // the contract crate for `export!`.
+        kit_cfg.entry_symbol = pmpx_plugin::abi::PMPX_ENTRY_SYMBOL.as_bytes().to_vec();
+
         kit_cfg.prefer_prebuilt = global.plugin_store.effective_prefer_prebuilt();
 
         let kit = phase(

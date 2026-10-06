@@ -108,7 +108,7 @@ impl PluginSet {
 
         let mut plugins = Vec::with_capacity(infos.len());
         for info in infos {
-            plugins.push(read_one(kit, &info)?);
+            plugins.push(read_one(&info));
         }
         plugins.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
 

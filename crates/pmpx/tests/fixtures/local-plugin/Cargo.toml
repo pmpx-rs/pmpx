@@ -1,0 +1,17 @@
+[package]
+name = "pmpx-plugin-local"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Single-element workspace: it lives inside the pmpx workspace's tree without being a member.
+[workspace]
+
+# A plain rlib, exactly like a published plugin crate: the cdylib is produced by the wrapper
+# that is generated for it, so there is no `#[no_mangle]` here.
+[lib]
+name = "pmpx_plugin_local"
+crate-type = ["rlib"]
+
+[dependencies]
+pmpx-plugin = { path = "../../../../pmpx-plugin" }

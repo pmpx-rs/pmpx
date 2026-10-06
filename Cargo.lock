@@ -165,9 +165,9 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "crate-plugin-kit"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4b3dae0a471025f95be463d2435450d8541f159bd5de72e2e692303ceae4f25"
+checksum = "7e239380a8ed547f58a6dda5f90af237a12d52806fb98c323808af7eeb7e6812"
 dependencies = [
  "anyhow",
  "directories",
@@ -464,7 +464,6 @@ dependencies = [
  "pmpx-plugin",
  "pmpx-project",
  "tempfile",
- "toml",
  "which",
 ]
 

@@ -336,6 +336,9 @@ impl Engine {
   - `plugin test` 除了包一层 `cargo test` 之外，唯一不冗余的内容只有三件单测在原理上碰不到的事：清单（TOML 不参与编译）、"以 cdylib 走宿主 loader 真的能加载"（作者不写 wrapper，且漏了 `export!` 的 rlib 照样编译通过）、"真实检测会不会选中它"（手工 `Context` 是故意绕过检测的）。这三件事有同一个根因——**作者今天无法在发布前本地装一次**（`plugin add` 只从 registry 装），所以该补的是那条回路，而不是再造一个测试命令。
   - 那条回路的形态是 `pmpx plugin add --path <本地目录>`：kit 的 `pack::build(cfg, plugin_dir, out_dir, options)` 已公开且就是吃本地 checkout（内部走 `PluginSource::Path`，wrapper 逻辑不必重写），缺的只是"按安装布局放进商店并记录"与"装前校验清单"两步。本次也不做这条。
   - 作者的一天因此是：`cargo test`（`pmpx-testkit` 让构造 Context / 跑 fixture 检测 / 断言日志行都是一屏代码）→ `cargo publish` → 用户 `pmpx plugin add <名字>`。
+- **kit 0.3.0 已发布，pmpx 已更新**：依赖从 `0.2.0` 抬到 `0.3.0`；`PluginSet::load` 改成从 `PluginInfo::extra`（kit 在 `list()` 里带回的宿主段落）读 `[detect]`/`[context]`，因此**不再第二次读清单**，`pmpx-engine` 的 `store` 特性也去掉了 `toml` 直接依赖；`describe_source` 增加 `Local` 分支（本地安装会显示"built from <目录>"），`InstallSource` 失去 `Copy` 由编译器逐个指出。
+- **`pmpx plugin add <路径>` 可用**（kit 的 `install_from_path`）：参数"是路径"由内容决定——能解析成含 `pmpx-plugin.toml` 的目录就是 checkout，其余照旧是插件名（`plugin add pnpm` 含义不变）。装前校验：ABI 不匹配**拒绝**（宿主反正会拒绝加载），没有 family / 没有 `[detect]` 标记**警告**（这些是"装上了但永远不会被选中"的静默失败）。端到端测试真编译一次夹具 checkout，再让真实检测选中它并走完一次调用。
+- **顺带修正了 README 的作者指南**：真实的已发布插件（`pmpx-plugin-cargo`）是**纯 rlib + `pub fn create()`**，`export!` 由安装/打包时生成的 wrapper 调用；README 此前让作者自己在插件里写 `export!`，那会与 wrapper 的同名导出符号**重复定义**（链接期 LNK2005，本地安装时第一次暴露出来）。
 - 仍然待做：`--explain` / `--json`（第 6 步里唯一还没做的两项）。
 
 回滚：第 3–7 步都是追加式搬迁，任何一步都可以在不碰 ABI 的前提下回退。第 2 步不可逆——它之后所有已发布插件都必须重编译，正如 `ABI_VERSION` 1 → 2 已经要求过一次的那样。

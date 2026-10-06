@@ -16,6 +16,7 @@
 
 mod config;
 mod detection;
+mod local;
 mod plugins;
 mod scripts;
 mod self_update;

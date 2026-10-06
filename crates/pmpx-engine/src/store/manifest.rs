@@ -1,26 +1,21 @@
-//! One manifest into one [`InstalledPlugin`], including the `[detect]` section that
-//! `crate-plugin-kit` does not know about.
+//! One [`PluginInfo`] into one [`InstalledPlugin`]: the host's own sections, read from the
+//! manifest the kit already read.
+//!
+//! `[detect]` and `[context]` are pmpx's vocabulary, not the kit's — the kit carries every
+//! section it does not interpret through [`PluginInfo::extra`] and never looks inside. That
+//! is what makes this a pure conversion: no file is opened here, and a manifest cannot be
+//! read twice and disagree with itself.
 
-use anyhow::Result;
-use crate_plugin_kit::{CratePluginKit, PluginInfo, PluginManifest};
-use pmpx_plugin::abi::PmpxPlugin;
+use crate_plugin_kit::PluginInfo;
 use pmpx_plugin::Family;
 
 use super::InstalledPlugin;
 
-/// Complete a [`PluginInfo`] into an [`InstalledPlugin`] (reading the manifest again for `[detect]`).
-pub(super) fn read_one(
-    kit: &CratePluginKit<PmpxPlugin>,
-    info: &PluginInfo,
-) -> Result<InstalledPlugin> {
-    // `list()` just read this manifest successfully, so a failure here can only mean the file
-    // disappeared between the two reads. Fall back to an empty detect then — the plugin is still
-    // listed, it just does not take part in detection.
-    let manifest = kit.manifest_of(&info.crate_name).ok();
-    let (strong, weak) = manifest.as_ref().map(detect_patterns).unwrap_or_default();
-    let wanted = manifest.as_ref().map(wanted_files).unwrap_or_default();
+/// Complete a [`PluginInfo`] into an [`InstalledPlugin`].
+pub(super) fn read_one(info: &PluginInfo) -> InstalledPlugin {
+    let (strong, weak) = detect_patterns(info);
 
-    Ok(InstalledPlugin {
+    InstalledPlugin {
         name: info.name.clone(),
         crate_name: info.crate_name.clone(),
         version: info.version.clone(),
@@ -29,49 +24,110 @@ pub(super) fn read_one(
         dir: info.dir.clone(),
         strong,
         weak,
-        wanted,
-    })
+        wanted: wanted_files(info),
+    }
 }
 
-/// Dig `[context] files` out of the manifest's unrecognized fields.
+/// Read `[context] files` out of the host's own sections.
 ///
 /// This is the plugin saying which files it wants to see the contents of. The host reads exactly
 /// these and nothing else -- the declarative, auditable allowlist stays the plugin's own
 /// declaration, and pmpx still knows nothing about what any of them mean.
-fn wanted_files(manifest: &PluginManifest) -> Vec<String> {
-    let Some(context) = manifest.extra.get("context") else {
-        return Vec::new();
-    };
-
-    str_array(context.get("files"))
+fn wanted_files(info: &PluginInfo) -> Vec<String> {
+    strings(info, "context", "files")
 }
 
-/// Dig `[detect]` out of the manifest's unrecognized fields.
+/// One `[section] key = [...]` out of the host's own sections, as a list of strings.
 ///
-/// `crate-plugin-kit` does not know it, so it is left as-is in `extra`.
-fn detect_patterns(manifest: &PluginManifest) -> (Vec<String>, Vec<String>) {
-    let Some(detect) = manifest.extra.get("detect") else {
-        return (Vec::new(), Vec::new());
-    };
-
-    (
-        str_array(detect.get("strong")),
-        str_array(detect.get("weak")),
-    )
-}
-
-/// Read a TOML value as an array of strings; when it is not an array, or an element is not a
-/// string, skip it instead of erroring — a malformed `detect` section must not make the whole
-/// plugin disappear from the manifest.
-fn str_array(value: Option<&toml::Value>) -> Vec<String> {
-    value
-        .and_then(|v| v.as_array())
+/// A malformed entry is skipped rather than fatal: a typo in a manifest must not make the plugin
+/// disappear from `plugin ls`, and a plugin with nothing to match simply never wins.
+fn strings(info: &PluginInfo, section: &str, key: &str) -> Vec<String> {
+    info.extra
+        .get(section)
+        .and_then(|section| section.get(key))
+        .and_then(|value| value.as_array())
         .map(|items| {
             items
                 .iter()
-                .filter_map(|x| x.as_str())
+                .filter_map(|item| item.as_str())
                 .map(str::to_string)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Read `[detect]`.
+///
+/// A malformed section should not make the plugin vanish from the list: whatever cannot be read
+/// as an array of strings is skipped, and a plugin with nothing to match simply never wins.
+fn detect_patterns(info: &PluginInfo) -> (Vec<String>, Vec<String>) {
+    (
+        strings(info, "detect", "strong"),
+        strings(info, "detect", "weak"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate_plugin_kit::{CratePluginKit, KitConfig};
+    use pmpx_plugin::abi::PmpxPlugin;
+
+    /// A manifest with both of the host's sections, one of them deliberately malformed.
+    const MANIFEST: &str = r#"
+[plugin]
+name    = "toy"
+version = "0.1.0"
+abi     = 3
+family  = "node"
+
+[detect]
+strong = ["toy.lock"]
+weak   = ["toy.json", 7]
+
+[context]
+files = ["toy.json"]
+"#;
+
+    /// A store directory with one plugin in it, read the way the host reads it.
+    fn listed(manifest: &str) -> PluginInfo {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = KitConfig::new("pmpx");
+        cfg.crate_prefix = "pmpx-plugin-".to_string();
+        let kit = CratePluginKit::<PmpxPlugin>::new(cfg.with_data_dir(tmp.path())).unwrap();
+
+        let dir = tmp.path().join("plugins").join("pmpx-plugin-toy");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pmpx-plugin.toml"), manifest).unwrap();
+
+        kit.list().unwrap().remove(0)
+    }
+
+    #[test]
+    fn the_hosts_sections_become_detect_and_context() {
+        let plugin = read_one(&listed(MANIFEST));
+
+        assert_eq!(plugin.strong, vec!["toy.lock".to_string()]);
+        assert_eq!(
+            plugin.weak,
+            vec!["toy.json".to_string()],
+            "a non-string element is skipped rather than fatal"
+        );
+        assert_eq!(plugin.wanted, vec!["toy.json".to_string()]);
+        assert_eq!(plugin.name, "toy");
+        assert_eq!(plugin.crate_name, "pmpx-plugin-toy");
+        assert_eq!(plugin.abi, Some(3));
+        assert_eq!(plugin.family, Some(pmpx_plugin::Family::NODE));
+    }
+
+    #[test]
+    fn a_plugin_without_those_sections_has_nothing_to_match() {
+        let bare = "[plugin]\nname = \"toy\"\nversion = \"0.1.0\"\n";
+
+        let plugin = read_one(&listed(bare));
+
+        assert!(plugin.strong.is_empty());
+        assert!(plugin.weak.is_empty());
+        assert!(plugin.wanted.is_empty());
+    }
 }

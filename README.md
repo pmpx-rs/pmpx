@@ -252,13 +252,15 @@ impl PackageManager for CargoPlugin {
     }
 }
 
+/// The factory the wrapper calls.
 pub fn create() -> Box<dyn PackageManager> { Box::new(CargoPlugin) }
-
-pmpx_plugin::export!(create);
 ```
 
-`export!` generates the whole C ABI shim — `catch_unwind`, string lifetimes, the vtable. A
-plugin author never sees any of it.
+A plugin crate is a **plain rlib**: no `#[no_mangle]`, no `crate-type`. When pmpx installs (or packs)
+a plugin it generates a few-line wrapper that calls `pmpx_plugin::export!(create)` and builds *that*
+into the cdylib — so the whole C ABI shim (`catch_unwind`, string lifetimes, the capability tables) is
+generated, and a plugin author never sees any of it. The rlib shape is also what makes `cargo test`
+work on the plugin directly.
 
 **`command()` is a pure mapping.** Its inputs are the verb, the arguments, and what the host knows
 about the call. It may not read files, write files, read the environment, or run processes — which
