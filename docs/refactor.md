@@ -315,7 +315,7 @@ impl Engine {
 | 3 | `pmpx-loader`：宿主侧 ABI，全部 | 现有的 shim 测试迁移到 loader；宿主侧 crate 里的 `unsafe` 数量为零 |
 | 4 | `pmpx-project` + `pmpx-detect`：纯决策 | 检测测试在**没有文件系统**的情况下运行（证据是数据）；今天的排序/pin/同分测试原样迁移；`pmpx-detect` 零依赖 —— **两步都已完成** |
 | 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出）—— **已全部完成**：设置（`Session::open` 走 `Options`，不依赖 clap）、商店（`store` 特性，默认关闭，关掉时依赖树里没有 kit/ureq/rustls/ring）、执行与事件、门面（`run_verb`/`run_script`） |
-| 6 | `pmpx` CLI：薄外壳、`--explain`、`--json`、别名展开 | 端到端测试跑真实二进制；所有人类可见输出都在这个 crate；库依赖守卫通过 |
+| 6 | `pmpx` CLI：薄外壳、`--explain`、`--json`、别名展开 —— **已完成**：`--json`（事件流 JSONL，stdout 纯净，后端输出改走 stderr）、`--explain`（决策报告，不执行任何东西，可与 `--json` 叠加） | 端到端测试跑真实二进制；所有人类可见输出都在这个 crate；库依赖守卫通过 |
 | 7 | `pmpx-testkit`（`pmpx plugin new` / `plugin test` **决定不做**，见下） | 插件能对着 fixture 目录、也能对着内存文件表，用真实检测完成测试，代码一屏写得下 —— 已完成 |
 
 进度：第 1 步的守卫并入了第 2/3 步（先有 crate，才守得住）。
@@ -339,7 +339,8 @@ impl Engine {
 - **kit 0.3.0 已发布，pmpx 已更新**：依赖从 `0.2.0` 抬到 `0.3.0`；`PluginSet::load` 改成从 `PluginInfo::extra`（kit 在 `list()` 里带回的宿主段落）读 `[detect]`/`[context]`，因此**不再第二次读清单**，`pmpx-engine` 的 `store` 特性也去掉了 `toml` 直接依赖；`describe_source` 增加 `Local` 分支（本地安装会显示"built from <目录>"），`InstallSource` 失去 `Copy` 由编译器逐个指出。
 - **`pmpx plugin add <路径>` 可用**（kit 的 `install_from_path`）：参数"是路径"由内容决定——能解析成含 `pmpx-plugin.toml` 的目录就是 checkout，其余照旧是插件名（`plugin add pnpm` 含义不变）。装前校验：ABI 不匹配**拒绝**（宿主反正会拒绝加载），没有 family / 没有 `[detect]` 标记**警告**（这些是"装上了但永远不会被选中"的静默失败）。端到端测试真编译一次夹具 checkout，再让真实检测选中它并走完一次调用。
 - **顺带修正了 README 的作者指南**：真实的已发布插件（`pmpx-plugin-cargo`）是**纯 rlib + `pub fn create()`**，`export!` 由安装/打包时生成的 wrapper 调用；README 此前让作者自己在插件里写 `export!`，那会与 wrapper 的同名导出符号**重复定义**（链接期 LNK2005，本地安装时第一次暴露出来）。
-- 仍然待做：`--explain` / `--json`（第 6 步里唯一还没做的两项）。
+- **`--json` 已落地**：全局 flag；`Event` 流按 JSONL 渲染（`resolved`/`starting`/`finished`/`warning`/`note`/`error`/`phase`/`notes`/`plugin`），`Sink::handle` 一处分支即可切换，`serde_json` 本来就是 CLI 的依赖，零新增。关键设计：**stdout 只有 JSON**，因此引擎新增 `ChildOutput::{Inherit, OnStderr}`，JSON 模式下把后端进程的 stdout 接到 pmpx 的 stderr（`--json` 之外行为一字不变：输出实时、颜色照旧、`pmpx build > log` 含义不变）。不支持 JSON 的命令明确拒绝（退出码 2），不把散文混进流里。
+- **`--explain` 已落地**：全局 flag；打印"没有执行任何东西"的报告——起始目录、项目根、向上走了几层、每个已装插件的 family/abi/标记/**不可用原因**、各家族的分数与是否被 pin、最终选择与理由；`--explain --json` 输出**单个对象**（不带 `--debug` 时阶段事件不混进报告）。它回答的是最贵的那类问题："装了插件却没生效"、"为什么没选中它"。
 
 ### 待办：一次代码审查留下的两条（中等以上）
 
