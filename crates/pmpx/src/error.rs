@@ -110,3 +110,47 @@ pub fn note_line(body: impl std::fmt::Display) {
         crate::style::paint(crate::style::DIM, format!("pmpx: {body}"))
     );
 }
+
+/// The engine reports what happened; the *exit code* is this program's decision, so the mapping lives
+/// here rather than in the engine.
+impl From<pmpx_engine::EngineError> for PmpxError {
+    fn from(error: pmpx_engine::EngineError) -> Self {
+        use pmpx_engine::EngineError;
+
+        match error {
+            // The user asked for something impossible.
+            EngineError::Usage(message) => PmpxError::Usage(message),
+
+            // Everything that means "your setup is incomplete": exit code 3, the code a script reads to
+            // tell an incomplete install from a broken pmpx.
+            EngineError::NotFound(message) | EngineError::Setup(message) => {
+                PmpxError::NotFound(message)
+            }
+            EngineError::NoProject(message) => PmpxError::NotFound(message),
+            EngineError::Detect(failure) => PmpxError::NotFound(failure.message()),
+
+            // The plugin answered normally that it cannot do this: a usage error if that is what it said,
+            // and pmpx's own failure if it broke.
+            EngineError::Call {
+                plugin,
+                verb,
+                error,
+            } => PmpxError::Backend(
+                format!("plugin {plugin} cannot do `{verb}`: {error}"),
+                call_exit_code(&error),
+            ),
+
+            EngineError::Start { .. } => PmpxError::Other(anyhow::anyhow!(error)),
+        }
+    }
+}
+
+/// The exit code for a plugin that answered "I cannot".
+fn call_exit_code(error: &pmpx_loader::CallError) -> u8 {
+    match error {
+        pmpx_loader::CallError::UnsupportedVerb
+        | pmpx_loader::CallError::InvalidArgs
+        | pmpx_loader::CallError::ShortCommand { .. } => EXIT_USAGE,
+        pmpx_loader::CallError::Internal | pmpx_loader::CallError::Unknown(_) => EXIT_INTERNAL,
+    }
+}

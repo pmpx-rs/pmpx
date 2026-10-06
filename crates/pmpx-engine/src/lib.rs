@@ -26,6 +26,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 mod backend;
 mod command;
@@ -36,6 +37,24 @@ mod not_found;
 mod resolve;
 
 pub mod discovery;
+
+/// Which plugin a project belongs to, and how it is chosen. Needs the store, because the candidates are
+/// the installed plugins.
+#[cfg(feature = "store")]
+pub mod detect;
+
+/// One run's state: configuration, the project, and the installed plugins.
+#[cfg(feature = "store")]
+pub mod session;
+
+/// The whole run path: resolve, load, ask, run, and pass the exit code through.
+#[cfg(feature = "store")]
+pub mod flow;
+
+#[cfg(feature = "store")]
+pub use flow::{run_script, run_verb};
+#[cfg(feature = "store")]
+pub use session::{Options, Session};
 
 /// The plugin store: what is installed, and installing more.
 ///
@@ -200,7 +219,13 @@ pub fn run(
 ) -> Result<u8, EngineError> {
     // Resolving is a PATH lookup plus a stat, and failing it is the setup kind of error: the caller
     // decides the exit code, but the message names what was searched.
+    let resolving = Instant::now();
     let resolved = resolve_program(&plan.program, plan.working_dir(fallback_cwd))?;
+    events(Event::Phase {
+        name: "spawn.resolve",
+        micros: resolving.elapsed().as_micros(),
+        detail: format!("{} ({:?})", resolved.program.display(), resolved.kind),
+    });
     events(Event::Resolved {
         program: plan.program.clone(),
         path: Some(resolved.program.clone()),
@@ -210,10 +235,19 @@ pub fn run(
     events(Event::Starting { plan: plan.clone() });
 
     let mut cmd = command::command_for(plan, fallback_cwd)?;
+
+    // This is the backend's own runtime, from here until its process exits: usually the whole of what a
+    // user perceives as "pmpx is slow", and never pmpx's own time.
+    let running = Instant::now();
     let status = cmd.status().map_err(|source| EngineError::Start {
         program: plan.program.clone(),
         source,
     })?;
+    events(Event::Phase {
+        name: "backend.run",
+        micros: running.elapsed().as_micros(),
+        detail: format!("exit {}", exit_code_of(status, &mut |_| {})),
+    });
 
     let code = exit_code_of(status, events);
     events(Event::Finished { code });
@@ -275,13 +309,38 @@ mod tests {
         let (code, events) = run_collecting(&plan, tmp.path());
 
         assert_eq!(code.unwrap(), 0);
+
+        // The phases and the three moments of the run, in the order they happen: resolving, then what
+        // was resolved, then the start, then how long the backend ran, then its exit code.
+        let names: Vec<String> = events
+            .iter()
+            .map(|event| match event {
+                Event::Phase { name, .. } => (*name).to_string(),
+                Event::Resolved { .. } => "resolved".to_string(),
+                Event::Starting { .. } => "starting".to_string(),
+                Event::Finished { .. } => "finished".to_string(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "spawn.resolve",
+                "resolved",
+                "starting",
+                "backend.run",
+                "finished"
+            ],
+            "the run reports itself in order"
+        );
+
         assert!(
-            matches!(&events[0], Event::Resolved { program, kind, .. }
+            matches!(&events[1], Event::Resolved { program, kind, .. }
                 if program == &OsString::from("cargo") && *kind == ProgramKind::Native),
             "{events:?}"
         );
         assert!(
-            matches!(&events[1], Event::Starting { plan }
+            matches!(&events[2], Event::Starting { plan }
                 if plan.program == *"cargo"
                     && plan.args.len() == 1
                     && plan.cwd.is_none()
@@ -289,7 +348,6 @@ mod tests {
             "{events:?}"
         );
         assert_eq!(events.last(), Some(&Event::Finished { code: 0 }));
-        assert_eq!(events.len(), 3, "nothing else to report: {events:?}");
     }
 
     #[test]
@@ -369,7 +427,9 @@ mod tests {
 
         assert_eq!(code.unwrap(), 0);
         assert!(
-            matches!(&events[0], Event::Resolved { kind, .. } if *kind == ProgramKind::CmdShim),
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Resolved { kind, .. } if *kind == ProgramKind::CmdShim)),
             "a `.cmd` is spawned through cmd.exe: {events:?}"
         );
         assert_eq!(

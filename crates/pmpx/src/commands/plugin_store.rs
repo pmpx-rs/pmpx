@@ -5,7 +5,7 @@
 
 use pmpx_plugin::Family;
 
-use crate::app::Session;
+use crate::app;
 use crate::cli::Cli;
 use crate::error::{PmpxError, EXIT_OK};
 use crate::style;
@@ -16,7 +16,7 @@ pub(super) fn plugin_add(
     names: &[String],
     version: Option<&str>,
 ) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     if version.is_some() && names.len() > 1 {
         return Err(PmpxError::Usage(
@@ -61,7 +61,7 @@ pub(super) fn plugin_add(
 
 /// `plugin rm`
 pub(super) fn plugin_rm(args: &Cli, names: &[String]) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     for name in names {
         session.kit.uninstall(name)?;
@@ -77,7 +77,7 @@ pub(super) fn plugin_update(
     names: &[String],
     version: Option<&str>,
 ) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     if version.is_some() && names.len() > 1 {
         return Err(PmpxError::Usage(
@@ -111,7 +111,7 @@ pub(super) fn plugin_update(
 
 /// `plugin search` -- search crates.io.
 pub(super) fn plugin_search(args: &Cli, keyword: &str, limit: usize) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     // The user types the short name (`cargo`) while crates.io has `pmpx-plugin-cargo`. Search
     // the short name directly: crates.io search is full text, so the `pmpx-plugin-` prefix is
@@ -140,7 +140,7 @@ pub(super) fn plugin_search(args: &Cli, keyword: &str, limit: usize) -> crate::e
 
 /// `plugin info <name>`: local install state plus crates.io information.
 pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     let mut found = false;
 
@@ -195,7 +195,7 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
         // The plugin record we already have is enough to load it -- no need to dress it up as a
         // detection result.
-        if let Ok(backend) = session.load_plugin(p) {
+        if let Ok(backend) = app::load_plugin(&session, p) {
             let (rustc_version, target) = backend.build_info();
             anstream::println!("Plugin reports");
             anstream::println!(

@@ -9,11 +9,11 @@ use std::path::PathBuf;
 
 use pmpx_plugin::Family;
 
-use crate::app::Session;
+use crate::app;
 use crate::cli::{Cli, PluginCommand};
-use crate::detect::{self, ScoredPlugin};
-use crate::error::{PmpxError, EXIT_OK};
+use crate::error::EXIT_OK;
 use crate::style;
+use pmpx_detect::ScoredPlugin;
 use pmpx_engine::store::InstalledPlugin;
 
 use super::plugin_pin::{plugin_set, plugin_unset};
@@ -35,7 +35,7 @@ pub(super) fn plugin_cmd(args: &Cli, cmd: &PluginCommand) -> crate::error::Resul
 
 /// `plugin ls`: list grouped by family.
 pub(super) fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     if session.plugins.plugins.is_empty() {
         anstream::println!("No plugins are installed.");
@@ -104,18 +104,18 @@ pub(super) fn print_plugin_row(p: &InstalledPlugin) {
 
 /// `plugin current`: the current plugin per family, plus candidates and scores.
 pub(super) fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
     let Some(root) = session.project_root().map(PathBuf::from) else {
-        return Err(session.no_project_error());
+        return Err(session.no_project_error().into());
     };
 
-    let families = detect::score_all(&session.plugins, &root, &session.project);
+    let families = app::score_all(&session, &root);
     if families.is_empty() {
         anstream::println!("No plugin can take part in the resolution.");
         return Ok(EXIT_OK);
     }
 
-    let selection = session.select_from(&root, &families).ok();
+    let selection = app::select_from(&session, &root, &families).ok();
 
     for (family, fs) in &families {
         let current = selection

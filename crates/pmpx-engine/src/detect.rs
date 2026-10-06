@@ -2,7 +2,7 @@
 //!
 //! The decision itself -- scoring, family choice, plugin choice, and every way that can fail -- lives
 //! in `pmpx-detect`, which takes data and returns data. This module is the wire between it and this
-//! host: the installed plugins as [`Candidate`]s, the project directory as a [`Presence`](pmpx_detect::Presence), the pins and
+//! host: the installed plugins as [`Candidate`](pmpx_detect::Candidate)s, the project directory as a [`Presence`](pmpx_detect::Presence), the pins and
 //! orderings from the two config layers, and the reason mapped onto the contract's wire form (the
 //! plugin is told why it was picked).
 
@@ -12,8 +12,9 @@ use std::path::Path;
 use pmpx_detect::{Candidate, Pins, Preferences};
 use pmpx_plugin::{Family, SelectionReason};
 
-use crate::config::{GlobalConfig, MergedProjectConfig};
-use pmpx_engine::store::PluginSet;
+use crate::store::PluginSet;
+use crate::Event;
+use pmpx_project::{GlobalConfig, MergedProjectConfig};
 
 pub use pmpx_detect::{DetectFailure, FamilyScore, Reason, ScoredPlugin, Selection};
 
@@ -84,47 +85,41 @@ pub fn score_all(
     set: &PluginSet,
     root: &Path,
     merged: &MergedProjectConfig,
+    events: &mut dyn FnMut(Event),
 ) -> BTreeMap<String, FamilyScore> {
-    let t = crate::debug::now();
+    let started = std::time::Instant::now();
     let families = pmpx_detect::score_all(&candidates(set), &presence(root), &pins(merged));
 
     // The marker count is the size of the job: one `exists()` per plugin per declared file, and every
     // Node backend claims `package.json` again.
-    crate::debug::done("detect.score", t, || {
-        format!(
+    events(Event::Phase {
+        name: "detect.score",
+        micros: started.elapsed().as_micros(),
+        detail: format!(
             "{} plugins, {} marker names",
             set.usable().count(),
             set.detect_names().len()
-        )
+        ),
     });
 
     families
 }
 
-/// Resolve which plugin the project belongs to.
+/// Resolve which plugin the project belongs to, scoring the project first.
+///
+/// Scoring goes through [`score_all`] even on this one-call path, so the trace names the work that is
+/// actually being done (and the marker count is the size of the work).
 pub fn select(
     set: &PluginSet,
     root: &Path,
     merged: &MergedProjectConfig,
     global: &GlobalConfig,
     explicit: Option<&str>,
+    events: &mut dyn FnMut(Event),
 ) -> Result<Selection, DetectFailure> {
-    // Scoring goes through this host's own wrapper even on the one-call path, so the `--debug` trace
-    // names the work that is actually being done (and the marker count is the size of that work).
-    // Scoring once, then deciding, is also what the old two-step shape did.
-    let families = score_all(set, root, merged);
+    let families = score_all(set, root, merged, events);
 
-    let t = crate::debug::now();
-    let result = pmpx_detect::select_from_scores(
-        &candidates(set),
-        &presence(root),
-        &pins(merged),
-        &preferences(global),
-        explicit,
-        &families,
-    );
-    trace(t, &result);
-    result
+    select_from_scores(set, root, &families, merged, global, explicit, events)
 }
 
 /// Resolve from scores the caller already computed, instead of scoring the project a second time.
@@ -135,8 +130,9 @@ pub fn select_from_scores(
     merged: &MergedProjectConfig,
     global: &GlobalConfig,
     explicit: Option<&str>,
+    events: &mut dyn FnMut(Event),
 ) -> Result<Selection, DetectFailure> {
-    let t = crate::debug::now();
+    let started = std::time::Instant::now();
     let result = pmpx_detect::select_from_scores(
         &candidates(set),
         &presence(root),
@@ -145,25 +141,20 @@ pub fn select_from_scores(
         explicit,
         families,
     );
-    trace(t, &result);
-    result
-}
 
-/// Nothing selected is **exit code 3**: pmpx itself is fine, the environment is missing something.
-///
-/// This lives here rather than in the decision crate because it is about *this* program's exit codes,
-/// and the decision has no opinion about processes.
-impl From<DetectFailure> for crate::error::PmpxError {
-    fn from(failure: DetectFailure) -> Self {
-        crate::error::PmpxError::NotFound(failure.message())
-    }
-}
-
-/// Both outcomes are reported: "nothing was selected, and it took 4ms to find that out" is as much
-/// part of the answer as the winner is.
-fn trace(t: std::time::Instant, result: &Result<Selection, DetectFailure>) {
-    crate::debug::done("detect.decide", t, || match result {
-        Ok(s) => format!("{} ({}, {} pts)", s.name, s.family, s.score),
-        Err(f) => format!("nothing selected: {}", f.message()),
+    // Both outcomes are reported: "nothing was selected, and it took 4ms to find that out" is as much
+    // part of the answer as the winner is.
+    events(Event::Phase {
+        name: "detect.decide",
+        micros: started.elapsed().as_micros(),
+        detail: match &result {
+            Ok(selection) => format!(
+                "{} ({}, {} pts)",
+                selection.name, selection.family, selection.score
+            ),
+            Err(failure) => format!("nothing selected: {}", failure.message()),
+        },
     });
+
+    result
 }

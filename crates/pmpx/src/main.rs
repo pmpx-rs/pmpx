@@ -24,12 +24,10 @@ mod cli;
 mod commands;
 mod config;
 mod debug;
-mod detect;
+mod detect_types;
 mod error;
-mod hints;
 mod runtime;
 mod selfupdate;
-mod spawn;
 mod style;
 
 use clap::Parser;

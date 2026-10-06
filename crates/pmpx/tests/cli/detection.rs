@@ -21,16 +21,20 @@ fn with_no_plugins_it_exits_three_and_explains_itself() {
 
     let err = stderr_of(&out);
     assert!(err.contains("no project type detected"), "{err}");
-    // The static hints table only states facts; it does not recommend a plugin
-    assert!(
-        err.contains("look like"),
-        "it should state what it saw: {err}"
-    );
-    assert!(err.contains("rust"), "{err}");
+
+    // Where the walk stopped, so "searched and found nothing" is distinguishable from "barely
+    // searched at all".
+    assert!(err.contains("stopped because"), "{err}");
+
+    // With nothing installed it says exactly that: there is no built-in table of ecosystems, because
+    // that is what plugins are for. It must not recommend a plugin either -- it does not know which
+    // ones exist beyond the ones that are installed.
+    assert!(err.contains("No plugins are installed"), "{err}");
     assert!(
         !err.contains("pmpx plugin add cargo"),
         "it must not recommend a specific plugin: {err}"
     );
+
     // But it must tell the user where the way out is
     assert!(err.contains(".pmpx.toml"), "{err}");
 }

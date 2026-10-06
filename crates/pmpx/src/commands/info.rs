@@ -8,23 +8,23 @@ use std::path::PathBuf;
 
 use pmpx_plugin::Family;
 
-use crate::app::Session;
+use crate::app;
 use crate::cli::Cli;
-use crate::detect::{self, FamilyScore};
-use crate::error::{PmpxError, EXIT_OK};
+use crate::detect_types::FamilyScore;
+use crate::error::EXIT_OK;
 use crate::style;
 
 /// Bare `pmpx`: state what this directory is and which backend will run.
 pub(super) fn show_detection(args: &Cli) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     let Some(root) = session.project_root().map(PathBuf::from) else {
-        return Err(session.no_project_error());
+        return Err(session.no_project_error().into());
     };
 
-    let selection = session.select(&root).map_err(PmpxError::from)?;
+    let selection = app::select(&session, &root)?;
 
-    session.emit_notes(&selection);
+    app::emit_notes(&session, &selection);
 
     anstream::println!(
         "{}  {}",
@@ -61,7 +61,7 @@ pub(super) fn show_detection(args: &Cli) -> crate::error::Result<u8> {
 /// Like `plugin current`, it always lists every candidate and score -- that is what makes
 /// ambiguity visible.
 pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     anstream::println!(
         "{}  {}",
@@ -143,7 +143,7 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
         return Ok(EXIT_OK);
     };
 
-    let families = detect::score_all(&session.plugins, &root, &session.project);
+    let families = app::score_all(&session, &root);
 
     if families.is_empty() {
         anstream::println!(
@@ -192,9 +192,9 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
 
     // The resolution result. The scores below are the ones this command already computed, so the
     // decision costs no further filesystem work.
-    match session.select_from(&root, &families) {
+    match app::select_from(&session, &root, &families) {
         Ok(selection) => {
-            session.emit_notes(&selection);
+            app::emit_notes(&session, &selection);
             anstream::println!(
                 "{}  {} ({})",
                 style::label(12, "Selected"),
@@ -202,7 +202,7 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
                 selection.crate_name
             );
 
-            match session.load_backend(&selection) {
+            match app::load_backend(&session, &selection) {
                 Ok(backend) => {
                     let (rustc_version, target) = backend.build_info();
                     anstream::println!(
@@ -250,7 +250,7 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
         Err(failure) => anstream::println!(
             "{}  (nothing selected)\n{}",
             style::label(12, "Selected"),
-            style::paint(style::ERROR_BODY, failure.message())
+            style::paint(style::ERROR_BODY, failure)
         ),
     }
 

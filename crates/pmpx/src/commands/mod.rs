@@ -19,9 +19,9 @@ use std::ffi::OsString;
 
 use clap::CommandFactory;
 
-use crate::app::{self, Session};
+use crate::app;
 use crate::cli::{Cli, Command, SelfCommand};
-use crate::error::{PmpxError, EXIT_OK};
+use crate::error::EXIT_OK;
 
 mod config;
 mod info;
@@ -57,7 +57,7 @@ pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
         }
 
         Command::Run { target, args: rest } => {
-            let session = Session::open(args).map_err(PmpxError::Other)?;
+            let session = app::session(args)?;
 
             // A name the project defines for itself is answered before any plugin is involved: it is a
             // convenience for the person, not something a plugin is asked to translate. Anything the
@@ -94,7 +94,7 @@ fn run_verb(
     argv: Vec<OsString>,
     allow_exec_fallback: bool,
 ) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
     app::run_verb(&session, verb, &argv, allow_exec_fallback)
 }
 
@@ -102,7 +102,7 @@ fn run_verb(
 
 /// `pmpx self update`: the one command that writes pmpx's own binary.
 ///
-/// It deliberately does not open a [`Session`]: updating must work when the plugin store
+/// It deliberately does not open a [`Session`](crate::app::Session): updating must work when the plugin store
 /// or the project configuration is what is broken.
 fn self_cmd(cmd: &SelfCommand) -> crate::error::Result<u8> {
     match cmd {

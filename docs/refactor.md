@@ -314,7 +314,7 @@ impl Engine {
 | 2 | `pmpx-plugin-abi` + `pmpx-plugin` v3：键、能力、C 头 | 一个 fixture 插件能用新外壳构建并加载；能力/键协商测试（缺必需能力、函数表过短、未知键、空数组、panic）全绿；C 头重新生成后逐字节一致 |
 | 3 | `pmpx-loader`：宿主侧 ABI，全部 | 现有的 shim 测试迁移到 loader；宿主侧 crate 里的 `unsafe` 数量为零 |
 | 4 | `pmpx-project` + `pmpx-detect`：纯决策 | 检测测试在**没有文件系统**的情况下运行（证据是数据）；今天的排序/pin/同分测试原样迁移；`pmpx-detect` 零依赖 —— **两步都已完成** |
-| 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出）—— **执行、事件、"跟插件说话"的全部机制已落地**，设置/商店/门面待做 |
+| 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出）—— **已全部完成**：设置（`Session::open` 走 `Options`，不依赖 clap）、商店（`store` 特性，默认关闭，关掉时依赖树里没有 kit/ureq/rustls/ring）、执行与事件、门面（`run_verb`/`run_script`） |
 | 6 | `pmpx` CLI：薄外壳、`--explain`、`--json`、别名展开 | 端到端测试跑真实二进制；所有人类可见输出都在这个 crate；库依赖守卫通过 |
 | 7 | `pmpx-testkit` + `pmpx plugin new/test` | 插件能对着 fixture 目录、也能对着内存文件表，用真实检测完成测试，代码一屏写得下 |
 

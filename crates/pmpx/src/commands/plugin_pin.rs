@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
-use crate::app::Session;
+use crate::app;
 use crate::cli::Cli;
 use crate::config::ProjectConfig;
 use crate::error::{PmpxError, EXIT_OK};
@@ -20,7 +20,7 @@ use crate::style;
 
 /// `plugin set <name>`: pin it in the nearest layer of `.pmpx.toml`.
 pub(super) fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
 
     let Some(plugin) = session.plugins.by_name(name) else {
         return Err(PmpxError::not_found(format!(
@@ -65,7 +65,7 @@ pub(super) fn plugin_unset(
     family: Option<&str>,
     yes: bool,
 ) -> crate::error::Result<u8> {
-    let session = Session::open(args).map_err(PmpxError::Other)?;
+    let session = app::session(args)?;
     let path = target_config_path(&session);
 
     let existing = ProjectConfig::load_from(&path)
@@ -136,7 +136,7 @@ pub(super) fn plugin_unset(
 /// `Session::open` already collected exactly that list -- `project.sources` holds every
 /// `.pmpx.toml` the walk found, nearest first -- so this asks it instead of walking the same
 /// directories a second time.
-fn target_config_path(session: &Session) -> PathBuf {
+fn target_config_path(session: &pmpx_engine::Session) -> PathBuf {
     if let Some(nearest) = session.project.sources.first() {
         return nearest.clone();
     }
