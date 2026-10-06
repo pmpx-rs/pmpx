@@ -167,6 +167,5 @@ fn edit_project_config(
     }
 
     let text = toml::to_string_pretty(&cfg).context("failed to serialise the project config")?;
-    std::fs::write(path, text)
-        .with_context(|| format!("failed to write the project config: {}", path.display()))
+    crate::config::atomic_write(path, &text)
 }

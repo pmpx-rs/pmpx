@@ -6,7 +6,8 @@
 //! `pmpx plugin set/unset`). Merge rule: **nearest wins**.
 //!
 //! This file is the global file and the types it is made of; [`paths`] says where the files live,
-//! and [`project`] holds `.pmpx.toml` and its layered merge.
+//! [`project`] holds `.pmpx.toml` and its layered merge, and [`write`] is how either of them is
+//! written back.
 
 use std::path::{Path, PathBuf};
 
@@ -15,9 +16,11 @@ use serde::{Deserialize, Serialize};
 
 mod paths;
 mod project;
+mod write;
 
 pub use paths::{default_data_dir, expand_tilde, global_config_path};
 pub use project::{MergedProjectConfig, ProjectConfig};
+pub use write::atomic_write;
 
 // ---- Global config --------------------------------------------------------
 

@@ -43,7 +43,7 @@ pub(super) fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
                 std::fs::create_dir_all(parent).map_err(|e| PmpxError::Other(e.into()))?;
             }
             let text = toml::to_string_pretty(&doc).map_err(|e| PmpxError::Other(e.into()))?;
-            std::fs::write(&path, text).map_err(|e| PmpxError::Other(e.into()))?;
+            crate::config::atomic_write(&path, &text).map_err(PmpxError::Other)?;
 
             anstream::println!(
                 "Wrote {key} = {} to {}",
