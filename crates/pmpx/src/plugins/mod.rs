@@ -48,6 +48,11 @@ pub struct InstalledPlugin {
 
     /// Weak evidence (10 points each): only proves the project belongs to this family.
     pub weak: Vec<String>,
+
+    /// The files this plugin asked to see the contents of, from its manifest's `[context] files`.
+    ///
+    /// Read from the project root and handed over with the call; the host does not interpret them.
+    pub wanted: Vec<String>,
 }
 
 impl InstalledPlugin {

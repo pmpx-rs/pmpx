@@ -67,6 +67,11 @@ impl PackageManager for Toy {
         if args.iter().any(|a| a == "context") {
             pmpx_plugin::debug::context();
         }
+        if args.iter().any(|a| a == "file") {
+            // The bytes, not just the name: what a plugin does with them is its own business, but
+            // they have to arrive whole.
+            pmpx_plugin::debug!("file: {:?}", ctx.file_str("package.json"));
+        }
 
         match verb {
             Verb::Install => Ok(CommandSpec::new("toy-bin").arg("add").args(args.iter())),

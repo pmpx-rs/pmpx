@@ -17,11 +17,13 @@
 
 mod backend;
 mod error;
+mod files;
 mod log;
 mod strings;
 
 pub use backend::{Backend, Invocation};
 pub use error::BackendError;
+pub(crate) use files::read as read_context_files;
 pub(crate) use log::{hooks, set_current_plugin};
 
 /// What the plugin reports about itself, as shown by `pmpx info`.

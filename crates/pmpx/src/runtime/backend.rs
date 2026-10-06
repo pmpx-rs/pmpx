@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 
 use crate_plugin_kit::{CratePluginKit, LoadedPlugin};
 use pmpx_plugin::abi::{
-    self, PmpxCommand, PmpxContextV1, PmpxKeyValue, PmpxPin, PmpxPluginV1, PmpxStr, ABI_VERSION,
-    PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_OK,
+    self, PmpxCommand, PmpxContextV1, PmpxFile, PmpxKeyValue, PmpxPin, PmpxPluginV1, PmpxStr,
+    ABI_VERSION, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_OK,
 };
 use pmpx_plugin::{CommandSpec, Verb};
 
 use super::error::BackendError;
+use super::files::ContextFile;
 use super::strings::{read_bytes, read_plugin_str};
 use super::BackendDiagnostics;
 use crate::error::{PmpxError, Result};
@@ -28,6 +29,8 @@ pub struct Backend {
     loaded: LoadedPlugin<PmpxPluginV1>,
     /// The plugin name declared in the manifest.
     pub name: String,
+    /// The files it asked to see, from its manifest's `[context] files`.
+    wanted: Vec<String>,
 }
 
 /// Everything one call needs that the plugin cannot work out for itself.
@@ -51,6 +54,8 @@ pub struct Invocation<'a> {
     pub scripts: &'a BTreeMap<String, String>,
     /// The `.pmpx.toml` files that were read, nearest first.
     pub config_files: &'a [PathBuf],
+    /// What this plugin asked to see the contents of, already read.
+    pub files: &'a [ContextFile],
 }
 
 impl Backend {
@@ -126,7 +131,16 @@ impl Backend {
         Ok(Self {
             loaded,
             name: plugin.name.clone(),
+            wanted: plugin.wanted.clone(),
         })
+    }
+
+    /// The files this plugin's manifest asked to see.
+    ///
+    /// Read by the caller rather than here: the library is loaded and validated at this point, but
+    /// nothing on the filesystem should be touched until a call is actually about to happen.
+    pub fn wanted_files(&self) -> &[String] {
+        &self.wanted
     }
 
     /// A reference to the vtable.
@@ -262,6 +276,21 @@ impl Backend {
             })
             .collect();
 
+        // What the plugin asked to see: the file contents were read by the caller, and the name
+        // strings and bytes live there for the length of this call.
+        let files_raw: Vec<PmpxFile> = invocation
+            .files
+            .iter()
+            .map(|file| PmpxFile {
+                name: text(&file.name),
+                contents: PmpxStr {
+                    ptr: file.bytes.as_ptr(),
+                    len: file.bytes.len(),
+                },
+                truncated: u32::from(file.truncated),
+            })
+            .collect();
+
         let mut context = PmpxContextV1::empty();
         context.root = root;
         context.start_dir = PmpxStr {
@@ -281,6 +310,8 @@ impl Backend {
         context.scripts_len = scripts_raw.len();
         context.config_paths = config_raw.as_ptr();
         context.config_paths_len = config_raw.len();
+        context.files = files_raw.as_ptr();
+        context.files_len = files_raw.len();
 
         let code = {
             let out_ptr = &mut cmd as *mut PmpxCommand;

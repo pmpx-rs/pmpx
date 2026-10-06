@@ -166,6 +166,9 @@ family  = "faketest"
 [detect]
 strong = ["fakepm.lock"]
 weak   = ["fakepm.json"]
+
+[context]
+files = ["fakepm.json"]
 "#;
 
 /// A sandbox with the fake plugin installed.

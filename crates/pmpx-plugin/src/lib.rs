@@ -16,9 +16,14 @@
 //! anything under `project_root`), does not write files, does not read environment variables,
 //! does not spawn child processes, and does not make network requests. That keeps `command()`
 //! completely pure (unit tests need no fixture directory at all) and stops a plugin from using
-//! file reads to probe things it should not know -- "what the project looks like" is decided by
-//! the host's detect layer and handed to the plugin through `matched`, a declarative, auditable
-//! allowlist.
+//! file reads to probe things it should not know.
+//!
+//! "What the project looks like" reaches a plugin through its **manifest**, in two declarative,
+//! auditable forms: the file *names* in `[detect]`, handed over as [`Context::matched`], and the
+//! file *contents* in `[context] files`, handed over as [`Context::files`]. A plugin that needs to
+//! know what a lockfile pins, or whether `package.json` mentions `packageManager`, declares that
+//! file and parses it itself; it never reaches for the filesystem, and pmpx never learns what is
+//! inside.
 //! # Saying something
 //!
 //! A plugin that wants to explain itself calls [`debug!`](macro@crate::debug) /
@@ -50,7 +55,7 @@ mod manager;
 mod spec;
 mod verb;
 
-pub use context::{Context, SelectionReason};
+pub use context::{Context, ContextFile, SelectionReason};
 pub use error::PluginError;
 pub use family::Family;
 pub use manager::PackageManager;

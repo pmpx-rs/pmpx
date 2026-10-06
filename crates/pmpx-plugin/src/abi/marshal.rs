@@ -61,6 +61,20 @@ pub unsafe fn read_os(s: PmpxStr) -> OsString {
     bytes_to_os(bytes)
 }
 
+/// Copy the bytes of one `PmpxStr` into a `Vec<u8>`.
+///
+/// Unlike [`read_os`] this carries no `OsString` semantics at all: it is for the contents of a file
+/// the plugin asked to see, which need not be UTF-8 and mean nothing to this side.
+///
+/// # Safety
+/// Same as [`read_os`].
+pub unsafe fn read_bytes(s: PmpxStr) -> Vec<u8> {
+    if s.len == 0 {
+        return Vec::new();
+    }
+    unsafe { std::slice::from_raw_parts(s.ptr, s.len) }.to_vec()
+}
+
 /// Read the bytes the host passed in as a `&str`, checking UTF-8; a failure returns
 /// [`PMPX_ERR_INVALID_ARGS`], and never `from_utf8_unchecked` -- that would assume the host is
 /// always correct, and the whole job of this ABI is not to make that assumption.

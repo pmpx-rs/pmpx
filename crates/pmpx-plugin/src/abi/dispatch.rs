@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::context::SelectionReason;
+use crate::context::{ContextFile, SelectionReason};
 use crate::{CommandSpec, Context, PackageManager, Verb};
 
-use super::marshal::{free_str, leak_bytes, leak_str, os_to_bytes, read_os, read_str};
+use super::marshal::{free_str, leak_bytes, leak_str, os_to_bytes, read_bytes, read_os, read_str};
 use super::types::{
     PmpxCommand, PmpxContextV1, PmpxStr, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_OK,
 };
@@ -172,6 +172,21 @@ pub unsafe fn dispatch_command(
         config_files.push(PathBuf::from(unsafe { read_os(raw) }));
     }
 
+    // What the plugin asked to see. The name is text -- the plugin wrote it in its own manifest --
+    // so a broken one is a contract error; the contents are bytes and go through untouched.
+    let mut files = Vec::with_capacity(context.files_len);
+    for i in 0..context.files_len {
+        let raw = unsafe { *context.files.add(i) };
+        match unsafe { read_str(raw.name) } {
+            Ok(name) => files.push(ContextFile {
+                name: name.to_string(),
+                bytes: unsafe { read_bytes(raw.contents) },
+                truncated: raw.truncated != 0,
+            }),
+            Err(code) => return code,
+        }
+    }
+
     let context = Context {
         project_root,
         start_dir,
@@ -181,6 +196,7 @@ pub unsafe fn dispatch_command(
         pins,
         scripts,
         config_files,
+        files,
     };
 
     // Bracketed so that anything the plugin logs can say what it was working with -- and so that a

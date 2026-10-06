@@ -58,6 +58,10 @@ pub fn run_verb(
     // The plugin is told the same facts the host decided on: the evidence that selected it, why it
     // was the one selected, and the project config as it was read. Assembled here rather than
     // re-derived over there.
+    // Read what this plugin declared in its manifest, just before the call: the files it will be
+    // handed, and nothing else on the filesystem is touched on its behalf.
+    let files = crate::runtime::read_context_files(backend.wanted_files(), &root);
+
     let invocation = Invocation {
         root: &root,
         start_dir: &session.start_dir,
@@ -67,6 +71,7 @@ pub fn run_verb(
         pins: &session.project.plugin,
         scripts: &session.project.scripts,
         config_files: &session.project.sources,
+        files: &files,
     };
     let answer = backend.command(&invocation, verb, args);
     // Pure mapping on the other side of the ABI: no file is read and no process is started

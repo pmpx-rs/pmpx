@@ -8,7 +8,9 @@ use std::sync::Mutex;
 use pmpx_plugin::abi::{self, PmpxHostV1, PmpxStr, PMPX_LEVEL_DEBUG, PMPX_LEVEL_WARN};
 use pmpx_plugin::Verb;
 
-use crate::support::{call_command, entry, read, TEST_CONFIG, TEST_SCORE, TEST_START_DIR};
+use crate::support::{
+    call_command, entry, read, TEST_CONFIG, TEST_FILE_CONTENT, TEST_SCORE, TEST_START_DIR,
+};
 
 /// What the "host" was told. `level:message`, so the level is asserted too.
 static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -87,6 +89,25 @@ fn the_context_can_be_logged_in_one_line() {
     assert!(line.contains("node=fakepm"), "{line}");
     assert!(line.contains("scripts=[build]"), "{line}");
     assert!(line.contains(TEST_CONFIG), "{line}");
+    assert!(line.contains("files=[package.json]"), "{line}");
+}
+
+/// The bytes of a declared file cross the boundary, not just its name -- which is the point of the
+/// channel: a plugin learns what a lockfile pins without reading anything itself.
+#[test]
+fn the_contents_of_a_declared_file_reach_the_plugin() {
+    let _serial = install(&TALKATIVE);
+
+    call_command("/proj", &[], Some(Verb::Run), &["file"]).expect("run should map");
+
+    let seen = LOGGED.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        vec![format!(
+            "{PMPX_LEVEL_DEBUG}:file: Some({TEST_FILE_CONTENT:?})"
+        )],
+        "the declared file's contents should reach the plugin verbatim"
+    );
 }
 
 /// Detaching the hooks puts the plugin back on its own stderr, which is what a plugin's own test

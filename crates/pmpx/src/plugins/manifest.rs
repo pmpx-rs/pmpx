@@ -18,6 +18,7 @@ pub(super) fn read_one(
     // listed, it just does not take part in detection.
     let manifest = kit.manifest_of(&info.crate_name).ok();
     let (strong, weak) = manifest.as_ref().map(detect_patterns).unwrap_or_default();
+    let wanted = manifest.as_ref().map(wanted_files).unwrap_or_default();
 
     Ok(InstalledPlugin {
         name: info.name.clone(),
@@ -28,7 +29,21 @@ pub(super) fn read_one(
         dir: info.dir.clone(),
         strong,
         weak,
+        wanted,
     })
+}
+
+/// Dig `[context] files` out of the manifest's unrecognized fields.
+///
+/// This is the plugin saying which files it wants to see the contents of. The host reads exactly
+/// these and nothing else -- the declarative, auditable allowlist stays the plugin's own
+/// declaration, and pmpx still knows nothing about what any of them mean.
+fn wanted_files(manifest: &PluginManifest) -> Vec<String> {
+    let Some(context) = manifest.extra.get("context") else {
+        return Vec::new();
+    };
+
+    str_array(context.get("files"))
 }
 
 /// Dig `[detect]` out of the manifest's unrecognized fields.

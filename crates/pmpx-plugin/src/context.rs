@@ -118,6 +118,40 @@ pub struct Context {
 
     /// The `.pmpx.toml` files that were actually read, nearest first.
     pub config_files: Vec<PathBuf>,
+
+    /// The contents of the files this plugin asked for in its manifest's `[context] files`.
+    ///
+    /// This is how a plugin learns something no file *name* can tell it -- what a lockfile pins,
+    /// whether `package.json` says `"packageManager": "pnpm@9"`, whether `Cargo.toml` has a
+    /// `[workspace]` -- **without** reaching for the filesystem itself. The host read exactly what
+    /// the manifest declared and interpreted none of it; how to parse it is the plugin's business.
+    ///
+    /// A declared file that was missing, unreadable, or not a plain relative path inside the
+    /// project is simply not here: the plugin declared it, so it can tell "absent" from "empty".
+    pub files: Vec<ContextFile>,
+}
+
+/// The contents of one file a plugin asked to see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextFile {
+    /// The path as the manifest declared it.
+    pub name: String,
+
+    /// The bytes, which need not be UTF-8.
+    pub bytes: Vec<u8>,
+
+    /// Whether the file was larger than the host's limit, so `bytes` is only its beginning.
+    pub truncated: bool,
+}
+
+impl ContextFile {
+    /// The contents as text, or `None` when they are not UTF-8.
+    ///
+    /// Lossy is deliberately not offered: a plugin parsing a lockfile should decide what a broken
+    /// encoding means, not have characters quietly replaced.
+    pub fn as_str(&self) -> Option<&str> {
+        std::str::from_utf8(&self.bytes).ok()
+    }
 }
 
 impl Context {
@@ -138,5 +172,19 @@ impl Context {
     /// What the project pins this plugin's `family` to, if anything.
     pub fn pinned_for(&self, family: &str) -> Option<&str> {
         self.pins.get(family).map(String::as_str)
+    }
+
+    /// The contents of one file this plugin declared in its `[context] files`.
+    ///
+    /// `None` means the host could not hand it over -- missing, unreadable, or a path it refuses to
+    /// read. Whether that is a problem is for the plugin to decide: a missing lockfile and a missing
+    /// optional config are different things.
+    pub fn file(&self, name: &str) -> Option<&ContextFile> {
+        self.files.iter().find(|file| file.name == name)
+    }
+
+    /// The same, as text: `None` when the file was not handed over or is not UTF-8.
+    pub fn file_str(&self, name: &str) -> Option<&str> {
+        self.file(name)?.as_str()
     }
 }

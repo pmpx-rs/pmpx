@@ -140,10 +140,21 @@ fn describe(call: &Call) -> String {
         .iter()
         .map(|path| path.display().to_string())
         .collect();
+    let files: Vec<String> = ctx
+        .files
+        .iter()
+        .map(|file| {
+            if file.truncated {
+                format!("{}(truncated)", file.name)
+            } else {
+                file.name.clone()
+            }
+        })
+        .collect();
 
     format!(
         "context: root={} start={} matched=[{}] verb={} args={} reason={} score={} pins=[{}] \
-         scripts=[{}] config=[{}]",
+         scripts=[{}] config=[{}] files=[{}]",
         ctx.project_root.display(),
         ctx.start_dir.display(),
         ctx.matched.join(" "),
@@ -154,6 +165,7 @@ fn describe(call: &Call) -> String {
         pins.join(" "),
         scripts.join(" "),
         configs.join(" "),
+        files.join(" "),
     )
 }
 
@@ -243,6 +255,11 @@ mod tests {
                 pins: [("node".to_string(), "pnpm".to_string())].into(),
                 scripts: [("build".to_string(), "tsc".to_string())].into(),
                 config_files: vec![PathBuf::from("/work/project/.pmpx.toml")],
+                files: vec![crate::ContextFile {
+                    name: "package.json".to_string(),
+                    bytes: b"{}".to_vec(),
+                    truncated: false,
+                }],
             },
             verb: Verb::Install,
             args_len: 2,

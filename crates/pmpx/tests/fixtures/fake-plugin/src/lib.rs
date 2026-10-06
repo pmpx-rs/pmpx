@@ -42,8 +42,12 @@ impl PackageManager for FakePm {
             // only the host knows (where the person ran from, and why this plugin was picked) got
             // there too.
             Verb::Install | Verb::Build | Verb::Test | Verb::Run | Verb::Update => {
+                // What the manifest asked to see, read by the host from the project root: the file
+                // is declared in `[context] files`, and "none" is what a missing one looks like.
+                let declared = ctx.file_str("fakepm.json").unwrap_or("none");
                 let probe = format!(
-                    "pmpx-probe root={} matched={} verb={} args={} start={} reason={} score={}",
+                    "pmpx-probe root={} matched={} verb={} args={} start={} reason={} score={} \
+                     declared={}",
                     ctx.project_root.display(),
                     ctx.matched.join("|"),
                     verb,
@@ -54,6 +58,7 @@ impl PackageManager for FakePm {
                     ctx.start_dir.display(),
                     ctx.reason,
                     ctx.score,
+                    declared,
                 );
 
                 // `echo` exists on both platforms, but on Windows it has to be the cmd builtin

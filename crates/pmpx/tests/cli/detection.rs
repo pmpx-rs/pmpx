@@ -127,6 +127,40 @@ fn the_plugin_receives_root_matched_verb_and_args_across_the_boundary() {
     assert!(line.contains("score=110"), "{line}");
 }
 
+/// The whole point of `[context] files`: the plugin asked for the contents of one file in its
+/// manifest, and pmpx read exactly that and handed it over. No file is read by the plugin, and pmpx
+/// still knows nothing about what is inside.
+#[test]
+fn a_file_declared_in_the_manifest_reaches_the_plugin() {
+    let (sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+    // Lockfile-shaped content, with no quote in it: the fixture echoes the probe through the shell,
+    // and a `"` would come back escaped by `cmd`, which is a property of the harness and not of the
+    // channel being tested.
+    std::fs::write(sb.project.join("fakepm.json"), "pinned: true").unwrap();
+
+    let out = sb.ok(&["build"]);
+    let line = out.lines().find(|l| l.contains("pmpx-probe")).unwrap();
+
+    assert!(
+        line.contains("declared=pinned: true"),
+        "the declared file's contents should reach the plugin: {line}"
+    );
+}
+
+/// A declared file that is not there is absent rather than empty -- the plugin asked for it, so it
+/// can tell the difference, and a missing optional config must not look like an empty one.
+#[test]
+fn a_declared_file_that_is_missing_is_absent() {
+    let (sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+
+    let out = sb.ok(&["build"]);
+    let line = out.lines().find(|l| l.contains("pmpx-probe")).unwrap();
+
+    assert!(line.contains("declared=none"), "{line}");
+}
+
 /// A `.pmpx.toml` pin is reported to the plugin as the reason it was selected -- the plugin cannot
 /// work that out for itself, and it is also how someone holds a plugin back on purpose.
 #[test]

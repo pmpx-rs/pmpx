@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 
 use pmpx_plugin::abi::{
-    self, PmpxCommand, PmpxContextV1, PmpxKeyValue, PmpxPin, PmpxPluginV1, PmpxStr,
+    self, PmpxCommand, PmpxContextV1, PmpxFile, PmpxKeyValue, PmpxPin, PmpxPluginV1, PmpxStr,
 };
 use pmpx_plugin::{CommandSpec, Verb};
 
@@ -37,6 +37,10 @@ pub(crate) const TEST_CONFIG: &str = "/work/.pmpx.toml";
 pub(crate) const TEST_REASON: u32 = abi::PMPX_REASON_PINNED;
 pub(crate) const TEST_SCORE: u32 = 110;
 
+/// The one file [`context`] pretends the plugin asked to see.
+pub(crate) const TEST_FILE_NAME: &str = "package.json";
+pub(crate) const TEST_FILE_CONTENT: &str = r#"{"name":"toy"}"#;
+
 /// A context plus the storage its views point at.
 ///
 /// The arrays must outlive the call, so they are owned here rather than being temporaries in
@@ -48,6 +52,7 @@ pub(crate) struct TestContext {
     _pins: Vec<PmpxPin>,
     _scripts: Vec<PmpxKeyValue>,
     _config: Vec<PmpxStr>,
+    _files: Vec<PmpxFile>,
 }
 
 impl TestContext {
@@ -89,6 +94,11 @@ pub(crate) fn context(root: &str, matched: &[&str], verb: u32, args: &[&str]) ->
         })
         .collect();
     let config: Vec<PmpxStr> = std::iter::once(view(TEST_CONFIG)).collect();
+    let files = vec![PmpxFile {
+        name: view(TEST_FILE_NAME),
+        contents: view(TEST_FILE_CONTENT),
+        truncated: 0,
+    }];
 
     let mut raw = PmpxContextV1::empty();
     raw.root = view(root);
@@ -106,6 +116,8 @@ pub(crate) fn context(root: &str, matched: &[&str], verb: u32, args: &[&str]) ->
     raw.scripts_len = scripts.len();
     raw.config_paths = config.as_ptr();
     raw.config_paths_len = config.len();
+    raw.files = files.as_ptr();
+    raw.files_len = files.len();
 
     TestContext {
         raw,
@@ -114,6 +126,7 @@ pub(crate) fn context(root: &str, matched: &[&str], verb: u32, args: &[&str]) ->
         _pins: pins,
         _scripts: scripts,
         _config: config,
+        _files: files,
     }
 }
 
