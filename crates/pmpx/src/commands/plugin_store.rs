@@ -196,24 +196,24 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
         // The plugin record we already have is enough to load it -- no need to dress it up as a
         // detection result.
-        if let Ok(backend) = Backend::load(&session.kit, p, session.host_hooks()) {
-            let d = backend.diagnostics();
+        if let Ok(backend) = Backend::load(p, session.host_hooks()) {
+            let (rustc_version, target) = backend.build_info();
             anstream::println!("Plugin reports");
             anstream::println!(
                 "  {} {}",
                 style::label(15, "name"),
-                style::paint(style::PM, &d.name)
+                style::paint(style::PM, &backend.name)
             );
-            anstream::println!("  {} {}", style::label(15, "family"), d.family);
+            anstream::println!("  {} {}", style::label(15, "family"), backend.family());
             anstream::println!(
                 "  {} {}",
                 style::label(15, "compiled with"),
-                style::paint(style::DIM, d.rustc_version)
+                style::paint(style::DIM, rustc_version)
             );
             anstream::println!(
                 "  {} {}",
                 style::label(15, "target"),
-                style::paint(style::DIM, d.target)
+                style::paint(style::DIM, target)
             );
             anstream::println!();
         }

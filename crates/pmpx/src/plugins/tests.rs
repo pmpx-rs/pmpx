@@ -29,7 +29,7 @@ weak   = ["Cargo.toml"]
 "#;
 
 /// Build a plugin store, returning (keep-alive, kit, data dir).
-fn store(entries: &[(&str, &str)]) -> (tempfile::TempDir, CratePluginKit<PmpxPluginV1>, PathBuf) {
+fn store(entries: &[(&str, &str)]) -> (tempfile::TempDir, CratePluginKit<PmpxPlugin>, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("store");
 
@@ -42,7 +42,7 @@ fn store(entries: &[(&str, &str)]) -> (tempfile::TempDir, CratePluginKit<PmpxPlu
     let cfg = crate_plugin_kit::KitConfig::new("pmpx")
         .with_data_dir(&root)
         .with_lock_timeout(Duration::from_millis(500));
-    let kit = CratePluginKit::<PmpxPluginV1>::new(cfg).unwrap();
+    let kit = CratePluginKit::<PmpxPlugin>::new(cfg).unwrap();
 
     (tmp, kit, root)
 }

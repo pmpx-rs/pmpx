@@ -59,6 +59,24 @@ impl<T: fmt::Display> fmt::Display for Painted<T> {
     }
 }
 
+/// The heading a family is grouped under in `plugin ls`, and shown as in `info`.
+///
+/// This is the host's presentation, which is exactly why it does **not** live in the plugin contract:
+/// what an ecosystem is called in someone's terminal is not something a plugin needs to agree with.
+/// An ecosystem the host has never heard of is shown by its own name, which is the honest answer.
+pub(crate) fn family_label(family: &str) -> &str {
+    match family {
+        "node" => "Node / frontend",
+        "rust" => "Rust",
+        "python" => "Python",
+        "go" => "Go",
+        "jvm" => "JVM",
+        "dotnet" => ".NET",
+        "php" => "PHP",
+        "ruby" => "Ruby",
+        other => other,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -99,6 +99,28 @@ jobs:
             echo "$crate has zero normal dependencies"
           done
 
+      # `unsafe` is a promise about *where* the raw pointers live, not a style preference. The ABI
+      # layer is where they belong; the plugin shell, the host's two C callbacks and its one load
+      # call are the only other places allowed to spell the word, and each of them is a boundary the
+      # contract names. Anywhere else it means a safe abstraction leaked.
+      - name: unsafe stays in the ABI islands
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only real code counts: a line whose `unsafe` sits behind a `//` is prose (several module
+          # docs here explain what `unsafe` is for).
+          allowed='^(crates/pmpx-plugin-abi/|crates/pmpx-loader/|crates/pmpx-plugin/src/(shell|export|debug|context)[.]rs|crates/pmpx/src/runtime/(backend|log)[.]rs)'
+          offenders=$(grep -rl --include='*.rs' -E '^[^/]*\bunsafe\b' crates \
+            | grep -Ev "$allowed" \
+            | grep -Ev '(/fixtures/|/tests/|tests[.]rs$)' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::unsafe outside the ABI islands:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "unsafe appears only in the ABI layer, the plugin shell (including the typed context), and the host's two ABI files"
+
       # "Zero async runtime in the whole stack" is a promise written down in the README.
       # Without this gate it is just a sentence -- if some dependency casually drags tokio
       # in, nobody would notice.

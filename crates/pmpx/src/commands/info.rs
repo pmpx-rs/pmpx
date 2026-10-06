@@ -34,7 +34,7 @@ pub(super) fn show_detection(args: &Cli) -> crate::error::Result<u8> {
     anstream::println!(
         "{}  {}",
         style::label(12, "Family"),
-        selection.family.display()
+        style::family_label(selection.family.as_str())
     );
     anstream::println!(
         "{}  {} (score {})",
@@ -167,7 +167,11 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
         } else {
             ""
         };
-        anstream::println!("  {}  score {}{pin}", fs.family.display(), fs.score);
+        anstream::println!(
+            "  {}  score {}{pin}",
+            style::family_label(fs.family.as_str()),
+            fs.score
+        );
 
         for p in &fs.plugins {
             let hits = p.all_hits().collect::<Vec<_>>().join(", ");
@@ -200,25 +204,29 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
 
             match session.load_backend(&selection) {
                 Ok(backend) => {
-                    let d = backend.diagnostics();
+                    let (rustc_version, target) = backend.build_info();
                     anstream::println!(
                         "  {} {}",
                         style::label(15, "reported name"),
-                        style::paint(style::PM, &d.name)
+                        style::paint(style::PM, &backend.name)
                     );
-                    anstream::println!("  {} {}", style::label(15, "reported family"), d.family);
+                    anstream::println!(
+                        "  {} {}",
+                        style::label(15, "reported family"),
+                        backend.family()
+                    );
                     anstream::println!(
                         "  {} {}",
                         style::label(15, "compiled with"),
-                        style::paint(style::DIM, d.rustc_version)
+                        style::paint(style::DIM, rustc_version)
                     );
                     anstream::println!(
                         "  {} {}",
                         style::label(15, "target"),
-                        style::paint(style::DIM, d.target)
+                        style::paint(style::DIM, target)
                     );
 
-                    if d.family != selection.family.as_str() {
+                    if backend.family() != selection.family.as_str() {
                         anstream::println!(
                             "  {}",
                             style::paint(
@@ -227,7 +235,7 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
                                     "⚠ the manifest says it is {}, it says it is {} -- was the \
                                      manifest edited?",
                                     selection.family.as_str(),
-                                    d.family
+                                    backend.family()
                                 )
                             )
                         );

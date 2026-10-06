@@ -10,7 +10,7 @@ use crate::{CommandSpec, Context, Family, PluginError, Verb};
 ///
 /// A panic in any of these methods is caught by the `export!` shell -- the `#[unsafe(no_mangle)]`
 /// wrapper catches it before it can cross `extern "C"`, which would abort the host process. The
-/// host then sees a failed call, or the [`PANIC_MARKER`](crate::abi::PANIC_MARKER) name, and
+/// host then sees a failed call, or the [`PANIC_MARKER`](crate::shell::PANIC_MARKER) name, and
 /// refuses to use the plugin; the panic message itself goes to stderr as usual.
 pub trait PackageManager: Send + Sync {
     /// Plugin name, e.g. `"cargo"`. The host compares it against the name declared in the

@@ -41,4 +41,4 @@ mod plugin;
 
 pub use context::{ContextSource, Files, NoFiles};
 pub use error::{CallError, LoadError};
-pub use plugin::{Command, Plugin};
+pub use plugin::{Command, Plugin, Tables};

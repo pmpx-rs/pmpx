@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate_plugin_kit::CratePluginKit;
-use pmpx_plugin::abi::PmpxPluginV1;
+use pmpx_plugin::abi::PmpxPlugin;
 
 use crate::detect::{select, DetectFailure};
 use crate::plugins::PluginSet;
@@ -74,7 +74,7 @@ fn pinning_a_broken_plugin_says_it_is_broken_not_missing() {
                 .unwrap(),
         )
         .with_lock_timeout(Duration::from_millis(500));
-    let kit = CratePluginKit::<PmpxPluginV1>::new(cfg).unwrap();
+    let kit = CratePluginKit::<PmpxPlugin>::new(cfg).unwrap();
     let set = PluginSet::load(&kit).unwrap();
 
     match select(

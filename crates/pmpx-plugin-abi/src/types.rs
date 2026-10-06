@@ -319,6 +319,11 @@ pub struct PmpxIdentity {
     pub free_str: unsafe extern "C" fn(s: PmpxStr),
 }
 
+/// The shape of [`PmpxCommandCap::run`], named so a generated shell can be checked against it at
+/// compile time -- a mismatch would otherwise be a call through the wrong function type, which the
+/// ABI's major version could not catch because it would not change.
+pub type RunFn = unsafe extern "C" fn(context: *const PmpxContext, out: *mut PmpxCommand) -> u32;
+
 /// The `command` capability: the plugin's whole job.
 #[repr(C)]
 pub struct PmpxCommandCap {
@@ -332,7 +337,7 @@ pub struct PmpxCommandCap {
     /// - every array the context points at must have at least the length it declares;
     /// - `out` must point at writable memory for a [`PmpxCommand`];
     /// - the call must not panic across the boundary.
-    pub run: unsafe extern "C" fn(context: *const PmpxContext, out: *mut PmpxCommand) -> u32,
+    pub run: RunFn,
     /// Release what [`PmpxCommandCap::run`] filled in.
     ///
     /// # Safety

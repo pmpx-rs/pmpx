@@ -66,7 +66,7 @@ pub(super) fn plugin_ls(args: &Cli, flat: bool) -> crate::error::Result<u8> {
 
     for (family, plugins) in &grouped {
         if let Some(family) = family {
-            print_family_group(family.display(), plugins);
+            print_family_group(style::family_label(family.as_str()), plugins);
         }
     }
     if let Some(plugins) = grouped.get(&None) {
@@ -123,7 +123,10 @@ pub(super) fn plugin_current(args: &Cli) -> crate::error::Result<u8> {
             .filter(|s| &s.family == family)
             .map(|s| s.name.as_str());
 
-        anstream::println!("{}", style::paint(style::LABEL, family.display()));
+        anstream::println!(
+            "{}",
+            style::paint(style::LABEL, style::family_label(family.as_str()))
+        );
         let mut ranked: Vec<&ScoredPlugin> = fs.plugins.iter().collect();
         ranked.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
 

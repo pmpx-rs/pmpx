@@ -431,6 +431,7 @@ dependencies = [
  "crate-plugin-kit",
  "directories",
  "flate2",
+ "pmpx-loader",
  "pmpx-plugin",
  "ring",
  "serde",
@@ -457,7 +458,8 @@ dependencies = [
 name = "pmpx-plugin"
 version = "0.2.1"
 dependencies = [
- "crate-plugin-kit",
+ "pmpx-loader",
+ "pmpx-plugin-abi",
  "tempfile",
 ]
 

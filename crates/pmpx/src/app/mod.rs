@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use crate_plugin_kit::{CratePluginKit, KitConfig};
-use pmpx_plugin::abi::PmpxPluginV1;
+use pmpx_plugin::abi::PmpxPlugin;
 use pmpx_plugin::Family;
 
 use crate::cli::Cli;
@@ -41,7 +41,7 @@ pub struct Session {
     /// Manifest list of installed plugins (manifest reads only, no dlopen).
     pub plugins: PluginSet,
     /// Plugin library handle.
-    pub kit: CratePluginKit<PmpxPluginV1>,
+    pub kit: CratePluginKit<PmpxPlugin>,
     /// The directories walk-up visited and why it stopped.
     pub walk: Walk,
     /// The project root. Computed in `open` -- it is the single answer to "where do we
@@ -86,13 +86,8 @@ impl Session {
 
         kit_cfg.prefer_prebuilt = global.plugin_store.effective_prefer_prebuilt();
 
-        // The entry symbol is written down in the contract crate, because that is where the
-        // `export!` shell that defines it lives. `crate-plugin-kit` derives the same name from
-        // `id`, so this hands over the authoritative one instead of keeping a third copy.
-        kit_cfg.entry_symbol = pmpx_plugin::abi::ENTRY_SYMBOL.as_bytes().to_vec();
-
         let t = debug::now();
-        let kit = CratePluginKit::<PmpxPluginV1>::new(kit_cfg).with_context(|| {
+        let kit = CratePluginKit::<PmpxPlugin>::new(kit_cfg).with_context(|| {
             format!(
                 "failed to initialise the plugin store: {}",
                 data_dir.display()
@@ -220,7 +215,7 @@ impl Session {
     /// The level is decided once, here: `--quiet` asks for the least, `--debug` for the most, and a
     /// plain run sits between them so that a plugin's warnings still get through while its notes
     /// do not.
-    pub fn host_hooks(&self) -> &'static pmpx_plugin::abi::PmpxHostV1 {
+    pub fn host_hooks(&self) -> &'static pmpx_plugin::abi::PmpxHost {
         crate::runtime::hooks(self.quiet, debug::enabled())
     }
 
@@ -288,7 +283,7 @@ impl Session {
         };
 
         let t = debug::now();
-        let backend = Backend::load(&self.kit, plugin, self.host_hooks());
+        let backend = Backend::load(plugin, self.host_hooks());
         debug::done("backend.load", t, || match &backend {
             Ok(_) => plugin.crate_name.clone(),
             Err(e) => format!("{} FAILED: {e}", plugin.crate_name),

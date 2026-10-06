@@ -41,21 +41,6 @@ impl Family {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Human-readable grouping header; unknown ecosystems are returned as-is.
-    pub fn display(&self) -> &str {
-        match self.as_str() {
-            "node" => "Node / frontend",
-            "rust" => "Rust",
-            "python" => "Python",
-            "go" => "Go",
-            "jvm" => "JVM",
-            "dotnet" => ".NET",
-            "php" => "PHP",
-            "ruby" => "Ruby",
-            other => other,
-        }
-    }
 }
 
 impl fmt::Display for Family {

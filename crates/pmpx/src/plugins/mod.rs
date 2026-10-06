@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use crate_plugin_kit::CratePluginKit;
-use pmpx_plugin::abi::PmpxPluginV1;
+use pmpx_plugin::abi::PmpxPlugin;
 use pmpx_plugin::Family;
 
 mod manifest;
@@ -103,7 +103,7 @@ pub struct PluginSet {
 
 impl PluginSet {
     /// Read once from the plugin store (manifest only).
-    pub fn load(kit: &CratePluginKit<PmpxPluginV1>) -> Result<Self> {
+    pub fn load(kit: &CratePluginKit<PmpxPlugin>) -> Result<Self> {
         let infos = kit.list().context("failed to scan the plugin directory")?;
 
         let mut plugins = Vec::with_capacity(infos.len());

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate_plugin_kit::CratePluginKit;
-use pmpx_plugin::abi::PmpxPluginV1;
+use pmpx_plugin::abi::PmpxPlugin;
 
 use crate::config::{GlobalConfig, MergedProjectConfig};
 use crate::detect::{select, DetectFailure, Selection};
@@ -55,7 +55,7 @@ fn fixture(plugins: &[(&str, &str, &[&str], &[&str])], files: &[&str]) -> Fixtur
     let cfg = crate_plugin_kit::KitConfig::new("pmpx")
         .with_data_dir(&store)
         .with_lock_timeout(Duration::from_millis(500));
-    let kit = CratePluginKit::<PmpxPluginV1>::new(cfg).unwrap();
+    let kit = CratePluginKit::<PmpxPlugin>::new(cfg).unwrap();
     let set = PluginSet::load(&kit).unwrap();
 
     let project = tmp.path().join("proj");

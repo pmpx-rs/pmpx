@@ -2,11 +2,15 @@
 //!
 //! Deliberately only three: that is what the host needs to distinguish -- the verb is not
 //! supported (so it can degrade to passing through verbatim), the arguments are wrong, and
-//! everything else. The human-readable description travels in the payload.
+//! everything else.
+//!
+//! **Only the code crosses the boundary.** The text stays here: it is for [rror!](crate::error)
+//! and for a plugin's own tests, and a host that shows something else is not contradicting this.
+//! (The ABI has no message channel; adding one would be a new capability, not a change to this
+//! type.)
 
 use std::fmt;
 
-use crate::abi;
 use crate::Verb;
 
 /// The errors a plugin can report.
@@ -46,9 +50,9 @@ impl PluginError {
     /// The corresponding cross-boundary error code.
     pub fn code(&self) -> u32 {
         match self {
-            PluginError::UnsupportedVerb(_) => abi::PMPX_ERR_UNSUPPORTED_VERB,
-            PluginError::InvalidArgs(_) => abi::PMPX_ERR_INVALID_ARGS,
-            PluginError::Other(_) => abi::PMPX_ERR_INTERNAL,
+            PluginError::UnsupportedVerb(_) => pmpx_plugin_abi::PMPX_ERR_UNSUPPORTED_VERB,
+            PluginError::InvalidArgs(_) => pmpx_plugin_abi::PMPX_ERR_INVALID_ARGS,
+            PluginError::Other(_) => pmpx_plugin_abi::PMPX_ERR_INTERNAL,
         }
     }
 

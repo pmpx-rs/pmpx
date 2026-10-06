@@ -9,7 +9,7 @@ use pmpx_plugin::Verb;
 use super::Session;
 use crate::debug;
 use crate::error::{PmpxError, Result};
-use crate::runtime::{BackendError, Invocation};
+use crate::runtime::Invocation;
 use crate::spawn;
 
 /// Run one verb all the way: resolve -> load -> ask the plugin -> spawn -> pass the exit
@@ -58,9 +58,9 @@ pub fn run_verb(
     // The plugin is told the same facts the host decided on: the evidence that selected it, why it
     // was the one selected, and the project config as it was read. Assembled here rather than
     // re-derived over there.
-    // Read what this plugin declared in its manifest, just before the call: the files it will be
-    // handed, and nothing else on the filesystem is touched on its behalf.
-    let files = crate::runtime::read_context_files(backend.wanted_files(), &root);
+    // What the plugin declared in its manifest, ready to be read if it asks: the declaration is the
+    // allowlist, and nothing on the filesystem is touched on its behalf.
+    let files = crate::runtime::Declared::new(&root, backend.wanted_files());
 
     let invocation = Invocation {
         root: &root,
@@ -69,33 +69,46 @@ pub fn run_verb(
         reason: selection.reason,
         score: selection.score,
         pins: &session.project.plugin,
-        scripts: &session.project.scripts,
         config_files: &session.project.sources,
+        args,
         files: &files,
     };
-    let answer = backend.command(&invocation, verb, args);
+    let answer = backend.command(&invocation, verb);
     // Pure mapping on the other side of the ABI: no file is read and no process is started
     // here, so this is the cost of the call itself, not of what it decides.
     debug::done("plugin.command", t, || verb.to_string());
 
     match answer {
-        Ok(Ok(spec)) => {
+        Ok(spec) => {
             announce(session.quiet, &spec);
             // A `cwd` the plugin set is applied inside `spawn`, so passing the project root here is
             // the fallback, not a decision this layer has to make.
             spawn::run(&spec, &root)
         }
 
-        Ok(Err(BackendError::UnsupportedVerb)) if allow_exec_fallback => {
+        Err(pmpx_loader::CallError::UnsupportedVerb) if allow_exec_fallback => {
             passthrough(&root, args, session.quiet)
         }
 
-        Ok(Err(e)) => Err(PmpxError::Backend(
-            format!("{} cannot do `{verb}`: {e}", selection.name),
-            e.exit_code(),
+        Err(e) => Err(PmpxError::Backend(
+            format!("plugin {} cannot do `{verb}`: {e}", selection.name),
+            backend_exit_code(&e),
         )),
+    }
+}
 
-        Err(e) => Err(e),
+/// The process exit code for a plugin that answered "I cannot".
+///
+/// "This backend cannot do what you asked" is a usage error; a plugin that failed, panicked, or
+/// answered with something malformed is counted as a pmpx error of its own.
+fn backend_exit_code(error: &pmpx_loader::CallError) -> u8 {
+    match error {
+        pmpx_loader::CallError::UnsupportedVerb
+        | pmpx_loader::CallError::InvalidArgs
+        | pmpx_loader::CallError::ShortCommand { .. } => crate::error::EXIT_USAGE,
+        pmpx_loader::CallError::Internal | pmpx_loader::CallError::Unknown(_) => {
+            crate::error::EXIT_INTERNAL
+        }
     }
 }
 

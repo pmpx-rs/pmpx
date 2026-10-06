@@ -20,10 +20,13 @@
 //!
 //! "What the project looks like" reaches a plugin through its **manifest**, in two declarative,
 //! auditable forms: the file *names* in `[detect]`, handed over as [`Context::matched`], and the
-//! file *contents* in `[context] files`, handed over as [`Context::files`]. A plugin that needs to
-//! know what a lockfile pins, or whether `package.json` mentions `packageManager`, declares that
-//! file and parses it itself; it never reaches for the filesystem, and pmpx never learns what is
-//! inside.
+//! file *contents* declared in `[context] files`, asked for one at a time through [`Context::file`]
+//! (or [`Context::file_str`]). A plugin that needs to know what a lockfile pins, or whether
+//! `package.json` mentions `packageManager`, declares that file and parses it itself; it never
+//! reaches for the filesystem, and pmpx never learns what is inside.
+//!
+//! Declaring a file is the *allowlist*, not a delivery: a name the manifest did not declare is
+//! never readable, and a file nobody asks for is never read.
 //! # Saying something
 //!
 //! A plugin that wants to explain itself calls [`debug!`](macro@crate::debug) /
@@ -34,8 +37,11 @@
 //! [`debug`](mod@crate::debug) for the details, including what happens with no host installed (a
 //! plugin's own `cargo test`).
 //!
-//! Data crossing [`abi`] is always `#[repr(C)]` POD, so the two sides need not share a rustc; see
-//! the module docs of [`abi`].
+//! Data crossing the boundary is always `#[repr(C)]` POD, so the two sides need not share a rustc;
+//! see the module docs of [`abi`]. A host asks the plugin for the **capabilities** it supports --
+//! `identity`, `command`, and optionally `attach` -- and passes a context whose every value is read
+//! through an accessor, which is what lets either side gain a key or a capability without a new
+//! contract version. [`shell`] is the plugin's end of that; `pmpx-loader` is the host's.
 //!
 //! The contract's parts live in sibling modules and are re-exported here, so every path that
 //! starts with `pmpx_plugin::` is stable: [`PackageManager`] and the [`Context`] it is called
@@ -44,8 +50,11 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod abi;
+/// The wire format, for a plugin that needs to talk to it directly (a hand-written shell, a test).
+pub use pmpx_plugin_abi as abi;
+
 pub mod debug;
+pub mod shell;
 
 mod context;
 mod error;
@@ -55,7 +64,7 @@ mod manager;
 mod spec;
 mod verb;
 
-pub use context::{Context, ContextFile, SelectionReason};
+pub use context::{Context, ContextBuilder, ContextFile, SelectionReason};
 pub use error::PluginError;
 pub use family::Family;
 pub use manager::PackageManager;

@@ -3,14 +3,14 @@
 
 use anyhow::Result;
 use crate_plugin_kit::{CratePluginKit, PluginInfo, PluginManifest};
-use pmpx_plugin::abi::PmpxPluginV1;
+use pmpx_plugin::abi::PmpxPlugin;
 use pmpx_plugin::Family;
 
 use super::InstalledPlugin;
 
 /// Complete a [`PluginInfo`] into an [`InstalledPlugin`] (reading the manifest again for `[detect]`).
 pub(super) fn read_one(
-    kit: &CratePluginKit<PmpxPluginV1>,
+    kit: &CratePluginKit<PmpxPlugin>,
     info: &PluginInfo,
 ) -> Result<InstalledPlugin> {
     // `list()` just read this manifest successfully, so a failure here can only mean the file

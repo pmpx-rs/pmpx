@@ -1,37 +1,35 @@
 //! The verbs a plugin is asked to translate.
 //!
-//! A closed set -- this is all the command line has -- and their numbering is part of the ABI, so
-//! it is pinned against [`crate::abi`] rather than chosen here.
+//! A closed set -- this is all the command line has -- and their numbering is part of the ABI, so it
+//! is pinned against the ABI crate rather than chosen here.
 
 use std::fmt;
-use std::str::FromStr;
 
-use crate::abi;
-use crate::PluginError;
+use pmpx_plugin_abi as abi;
 
 /// The verbs pmpx recognizes. A closed set -- this is all the command line has.
-/// The numbers correspond one-to-one with the `VERB_*` constants in [`abi`], and the order must
-/// not change (changing it requires [`abi::ABI_VERSION`] + 1); a test in the `abi` module pins
-/// this down.
+///
+/// The numbers correspond one-to-one with the `PMPX_VERB_*` constants, and the order must not change:
+/// a different numbering is an ABI break, and the surface snapshot in the ABI crate records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Verb {
     /// Install dependencies. No argument = install everything in the lockfile, with arguments =
     /// add.
-    Install = abi::VERB_INSTALL,
+    Install = abi::PMPX_VERB_INSTALL,
     /// Remove dependencies.
-    Remove = abi::VERB_REMOVE,
+    Remove = abi::PMPX_VERB_REMOVE,
     /// Run a script / target.
-    Run = abi::VERB_RUN,
+    Run = abi::PMPX_VERB_RUN,
     /// Build.
-    Build = abi::VERB_BUILD,
+    Build = abi::PMPX_VERB_BUILD,
     /// Test.
-    Test = abi::VERB_TEST,
+    Test = abi::PMPX_VERB_TEST,
     /// Update dependencies.
-    Update = abi::VERB_UPDATE,
+    Update = abi::PMPX_VERB_UPDATE,
     /// Escape hatch: run an arbitrary command. Plugins that do not support it should report an
     /// error explicitly, see [`PackageManager::command`](crate::PackageManager::command).
-    Exec = abi::VERB_EXEC,
+    Exec = abi::PMPX_VERB_EXEC,
 }
 
 impl Verb {
@@ -51,17 +49,21 @@ impl Verb {
         self as u32
     }
 
-    /// Reconstruct from a cross-boundary number; returns `None` for an unknown one (this is where
-    /// a host and a plugin of mismatched versions land).
+    /// Reconstruct from a cross-boundary number.
+    ///
+    /// `None` means "a verb this build does not know", and the shell answers that with
+    /// [`PMPX_ERR_UNSUPPORTED_VERB`](abi::PMPX_ERR_UNSUPPORTED_VERB) rather than "invalid
+    /// arguments": that is what keeps a *new* verb additive, because it leaves the host's
+    /// degradation path open for `exec`.
     pub const fn from_abi(n: u32) -> Option<Verb> {
         match n {
-            abi::VERB_INSTALL => Some(Verb::Install),
-            abi::VERB_REMOVE => Some(Verb::Remove),
-            abi::VERB_RUN => Some(Verb::Run),
-            abi::VERB_BUILD => Some(Verb::Build),
-            abi::VERB_TEST => Some(Verb::Test),
-            abi::VERB_UPDATE => Some(Verb::Update),
-            abi::VERB_EXEC => Some(Verb::Exec),
+            abi::PMPX_VERB_INSTALL => Some(Verb::Install),
+            abi::PMPX_VERB_REMOVE => Some(Verb::Remove),
+            abi::PMPX_VERB_RUN => Some(Verb::Run),
+            abi::PMPX_VERB_BUILD => Some(Verb::Build),
+            abi::PMPX_VERB_TEST => Some(Verb::Test),
+            abi::PMPX_VERB_UPDATE => Some(Verb::Update),
+            abi::PMPX_VERB_EXEC => Some(Verb::Exec),
             _ => None,
         }
     }
@@ -86,14 +88,32 @@ impl fmt::Display for Verb {
     }
 }
 
-impl FromStr for Verb {
-    type Err = PluginError;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Verb::ALL
-            .iter()
-            .copied()
-            .find(|v| v.as_str() == s)
-            .ok_or_else(|| PluginError::other(format!("unknown verb: {s}")))
+    /// Every verb round-trips, and the numbering is the ABI's.
+    #[test]
+    fn every_verb_has_its_number() {
+        for (verb, number) in [
+            (Verb::Install, abi::PMPX_VERB_INSTALL),
+            (Verb::Remove, abi::PMPX_VERB_REMOVE),
+            (Verb::Run, abi::PMPX_VERB_RUN),
+            (Verb::Build, abi::PMPX_VERB_BUILD),
+            (Verb::Test, abi::PMPX_VERB_TEST),
+            (Verb::Update, abi::PMPX_VERB_UPDATE),
+            (Verb::Exec, abi::PMPX_VERB_EXEC),
+        ] {
+            assert_eq!(verb.to_abi(), number);
+            assert_eq!(Verb::from_abi(number), Some(verb));
+        }
+        assert_eq!(Verb::ALL.len(), 7, "the closed set has seven verbs");
+    }
+
+    /// A verb this build does not know is not an error here: the shell decides, and it says
+    /// "unsupported".
+    #[test]
+    fn an_unknown_number_has_no_verb() {
+        assert_eq!(Verb::from_abi(999), None);
     }
 }

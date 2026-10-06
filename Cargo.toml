@@ -22,6 +22,10 @@ pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.2.1" }
 # so the crate's own default stays `no_std`.
 pmpx-plugin-abi = { path = "crates/pmpx-plugin-abi", version = "0.2.1" }
 
+# The host side of the ABI: negotiation, calling, and the typed context. This is the only place the
+# two sides meet, so the CLI itself never sees a pointer.
+pmpx-loader = { path = "crates/pmpx-loader", version = "0.2.1" }
+
 # General plugin management library. An external dependency, consumed by version, not by path.
 crate-plugin-kit = "0.2.0"
 

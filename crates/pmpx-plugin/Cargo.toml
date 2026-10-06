@@ -17,15 +17,17 @@ categories = ["development-tools"]
 # people can write plugins. Only `#[repr(C)]` data crosses the boundary, so nothing else is
 # needed anyway.
 [dependencies]
+# The wire format. `std` is on for the `OsStr` conversions this crate needs to read arguments and
+# write paths; the ABI crate itself stays `no_std`.
+pmpx-plugin-abi = { workspace = true, features = ["std"] }
 
 [build-dependencies]
 # No dependencies: build.rs just runs `rustc --version` once and writes the result into an
 # environment variable.
 
 [dev-dependencies]
-# Goes through the real load path: dlopen an actual cdylib using the very library the host
-# will use. Hand-rolling libloading would mean hard-coding both the entry symbol name and the
-# library file name, and those are exactly the two names a test should catch being out of
-# sync.
-crate-plugin-kit.workspace = true
+# The host side of the ABI, so these tests do not hand-roll a second one: `Tables` drives an
+# in-process plugin through exactly the code the real host uses, and `Plugin` does the same through a
+# real `dlopen`.
+pmpx-loader = { path = "../pmpx-loader" }
 tempfile = "3"

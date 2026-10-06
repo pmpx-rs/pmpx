@@ -1,16 +1,17 @@
 //! Saying something to the person running pmpx.
 //!
-//! A plugin cannot print usefully on its own: it does not know the id the host shows for it,
-//! whether the person asked for detail, or where those lines should go. So it calls the macros
-//! here -- `debug!`, `info!`, `warn!`, `error!` -- and the **host** decides: it adds the prefix and
-//! the id, and drops anything louder than the level it was asked for.
+//! A plugin cannot print usefully on its own: it does not know the id the host shows for it, whether
+//! the person asked for detail, or where those lines should go. So it calls the macros here --
+//! [`debug!`](macro@crate::debug), [`info!`](macro@crate::info), [`warn!`](macro@crate::warn), [`error!`](macro@crate::error)
+//! -- and the **host** decides: it adds the prefix and the id, and drops anything louder than the
+//! level it was asked for.
 //!
 //! Two consequences worth knowing:
 //!
-//! - **Nothing is formatted when the host would not print it.** Every macro asks
-//!   [`wants`] first, so a run without `--debug` pays nothing for the debug lines a plugin writes.
-//! - **`--debug` is not an input.** The plugin always calls the same way; only the host's printing
-//!   changes, so a debug run executes byte-for-byte the same command as any other.
+//! - **Nothing is formatted when the host would not print it.** Every macro asks [`wants`] first, so
+//!   a run without a trace pays nothing for the lines a plugin writes.
+//! - **The trace is not an input.** The plugin always calls the same way; only the host's printing
+//!   changes, so a traced run executes byte-for-byte the same command as any other.
 //!
 //! Without a host -- a plugin's own `cargo test` -- the messages go to stderr directly, at every
 //! level, which is what an author wants while writing a plugin.
@@ -20,8 +21,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
 
-use crate::abi::{PmpxHostV1, PmpxStr};
-use crate::{Context, Verb};
+use pmpx_plugin_abi::{PmpxLog, PmpxStr};
 
 /// How loud one message is.
 ///
@@ -42,48 +42,48 @@ impl Level {
     /// The number this level crosses the boundary as.
     pub const fn to_abi(self) -> u32 {
         match self {
-            Level::Error => crate::abi::PMPX_LEVEL_ERROR,
-            Level::Warn => crate::abi::PMPX_LEVEL_WARN,
-            Level::Info => crate::abi::PMPX_LEVEL_INFO,
-            Level::Debug => crate::abi::PMPX_LEVEL_DEBUG,
+            Level::Error => pmpx_plugin_abi::PMPX_LEVEL_ERROR,
+            Level::Warn => pmpx_plugin_abi::PMPX_LEVEL_WARN,
+            Level::Info => pmpx_plugin_abi::PMPX_LEVEL_INFO,
+            Level::Debug => pmpx_plugin_abi::PMPX_LEVEL_DEBUG,
         }
     }
 }
 
-/// The host's hooks, or null when there is no host (the plugin is under its own tests).
-static HOST: AtomicPtr<PmpxHostV1> = AtomicPtr::new(std::ptr::null_mut());
+/// The host's logging table, or null when there is no host (the plugin is under its own tests).
+///
+/// It is only stored after its `size` was checked against what this build knows how to read, which
+/// is what makes reading `max_level` below safe.
+static LOG: AtomicPtr<PmpxLog> = AtomicPtr::new(std::ptr::null_mut());
 
 /// What the plugin calls itself, for the no-host case only -- the host knows its own id for it.
 static NAME: OnceLock<String> = OnceLock::new();
 
 // The call in progress on this thread, held here rather than passed around so that `context()` and
-// the macros can report what the host said without every plugin method threading it through. It is
-// set for exactly as long as `PackageManager::command` runs.
+// the macros can report what the host said without every plugin method threading it through. The
+// description is rendered by the shell, because only it has the raw context.
 thread_local! {
-    static CURRENT: RefCell<Option<Call>> = const { RefCell::new(None) };
+    static CURRENT: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// What the shell knows about the call in progress.
-pub(crate) struct Call {
-    pub(crate) context: Context,
-    pub(crate) verb: Verb,
-    pub(crate) args_len: usize,
-}
-
-/// Install the host's hooks. Called by the `export!` shell; a plugin never calls this.
-pub fn set_host(host: *const PmpxHostV1) {
-    HOST.store(host as *mut PmpxHostV1, Ordering::Release);
+/// Install the host's logging table. Called by the `export!` shell; a plugin never calls this.
+///
+/// # Safety
+/// `table` must be the host's, with at least `size_of::<PmpxLog>()` bytes, and must stay valid for
+/// the life of the process.
+pub(crate) unsafe fn set_log_table(table: *const PmpxLog) {
+    LOG.store(table as *mut PmpxLog, Ordering::Release);
 }
 
 /// Remember the plugin's own name, for the no-host fallback. Called by the `export!` shell.
-pub fn remember_name(name: &str) {
+pub(crate) fn remember_name(name: &str) {
     let _ = NAME.set(name.to_string());
 }
 
 /// Whether the host would print a message at this level.
 ///
-/// Cheap on purpose: the macros call it *before* formatting, so a silent host costs one atomic
-/// load. With no host the answer is "yes", because that is a plugin's own test run.
+/// Cheap on purpose: the macros call it *before* formatting, so a silent host costs one atomic load.
+/// With no host the answer is "yes", because that is a plugin's own test run.
 pub fn wants(level: Level) -> bool {
     match host() {
         Some(host) => level.to_abi() <= host.max_level,
@@ -99,101 +99,50 @@ pub fn emit(level: Level, args: fmt::Arguments<'_>) {
     send(level, &args.to_string());
 }
 
-/// Print the whole context of the call in progress.
+/// Print the whole context of the call in progress, as one line.
 ///
-/// One line, once: what the host said it was given. A plugin that wants to know its situation does
-/// not have to reassemble it from the parameters.
+/// The line is rendered by the shell that made the call, so it carries what the host actually said
+/// rather than a summary this side guessed at. Outside a call there is nothing to print.
 pub fn context() {
     if !wants(Level::Debug) {
         return;
     }
 
-    let line = CURRENT.with(|current| current.borrow().as_ref().map(describe));
-    if let Some(line) = line {
+    if let Some(line) = CURRENT.with(|current| current.borrow().clone()) {
         send(Level::Debug, &line);
     }
 }
 
-/// Run `f` with `call` installed as the current one, restoring whatever was there before.
-pub(crate) fn with_call<T>(call: Call, f: impl FnOnce() -> T) -> T {
-    let previous = CURRENT.with(|current| current.borrow_mut().replace(call));
+/// Run `f` with `description` installed as the current call, restoring whatever was there before.
+pub(crate) fn with_call<T>(description: String, f: impl FnOnce() -> T) -> T {
+    let previous = CURRENT.with(|current| current.borrow_mut().replace(description));
     let out = f();
     CURRENT.with(|current| *current.borrow_mut() = previous);
     out
-}
-
-/// One line describing a call, as `context()` prints it.
-///
-/// Everything the host said, in the host's own words -- including the reason it picked this plugin
-/// and what the project config pins, which a plugin cannot work out for itself.
-fn describe(call: &Call) -> String {
-    let ctx = &call.context;
-
-    let pins: Vec<String> = ctx
-        .pins
-        .iter()
-        .map(|(family, plugin)| format!("{family}={plugin}"))
-        .collect();
-    let scripts: Vec<&str> = ctx.scripts.keys().map(String::as_str).collect();
-    let configs: Vec<String> = ctx
-        .config_files
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect();
-    let files: Vec<String> = ctx
-        .files
-        .iter()
-        .map(|file| {
-            if file.truncated {
-                format!("{}(truncated)", file.name)
-            } else {
-                file.name.clone()
-            }
-        })
-        .collect();
-
-    format!(
-        "context: root={} start={} matched=[{}] verb={} args={} reason={} score={} pins=[{}] \
-         scripts=[{}] config=[{}] files=[{}]",
-        ctx.project_root.display(),
-        ctx.start_dir.display(),
-        ctx.matched.join(" "),
-        call.verb,
-        call.args_len,
-        ctx.reason,
-        ctx.score,
-        pins.join(" "),
-        scripts.join(" "),
-        configs.join(" "),
-        files.join(" "),
-    )
 }
 
 /// Hand one message to the host, or print it here when there is none.
 fn send(level: Level, message: &str) {
     match host() {
         Some(host) => {
-            let borrowed = PmpxStr {
-                ptr: message.as_ptr(),
-                len: message.len(),
-            };
-            // SAFETY: the host installed this pointer and keeps it alive for the process, and
-            // `message` outlives the call -- which is exactly what the contract asks for.
-            unsafe { (host.log)(level.to_abi(), borrowed) };
+            let borrowed = PmpxStr::new(message.as_ptr(), message.len());
+            // SAFETY: the table was checked when it was installed, and the host keeps it alive for
+            // the process; `message` outlives the call, which is what the contract asks for.
+            unsafe { (host.write)(level.to_abi(), borrowed) };
         }
         None => eprintln!("[{}] {message}", name()),
     }
 }
 
-/// The hooks, if a host installed any.
-fn host() -> Option<&'static PmpxHostV1> {
-    let raw = HOST.load(Ordering::Acquire);
+/// The logging table, if a host installed one.
+fn host() -> Option<&'static PmpxLog> {
+    let raw = LOG.load(Ordering::Acquire);
     if raw.is_null() {
         return None;
     }
 
-    // SAFETY: `set_host` is only called by the shell with a pointer the host promises to keep
-    // alive and unchanged for the life of the process.
+    // SAFETY: only the shell calls `set_log_table`, with a pointer the host promises to keep alive
+    // and unchanged, and only after checking that the table is large enough to read.
     Some(unsafe { &*raw })
 }
 
@@ -204,8 +153,9 @@ fn name() -> &'static str {
 
 /// Say something that went wrong.
 ///
-/// Printed by the host in its error style; the plugin's own error return is still what decides the
-/// exit code, so this is for the detail behind it.
+/// Printed by the host in its error style. This is also the channel for the text a
+/// [`PluginError`](crate::PluginError) carries: that text stays inside the plugin and is never sent
+/// across the boundary, so `error!` is how it reaches a person.
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
@@ -231,7 +181,7 @@ macro_rules! info {
 
 /// Say something for whoever is debugging.
 ///
-/// With `--debug` off the host drops it, and this costs an atomic load and no formatting at all.
+/// With no trace asked for the host drops it, and this costs an atomic load and no formatting.
 #[macro_export]
 macro_rules! debug {
     ($($arg:tt)*) => {
@@ -242,54 +192,9 @@ macro_rules! debug {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    fn call() -> Call {
-        Call {
-            context: Context {
-                project_root: PathBuf::from("/work/project"),
-                start_dir: PathBuf::from("/work/project/packages/api"),
-                matched: vec!["package.json".to_string(), "pnpm-lock.yaml".to_string()],
-                reason: crate::SelectionReason::Pinned,
-                score: 110,
-                pins: [("node".to_string(), "pnpm".to_string())].into(),
-                scripts: [("build".to_string(), "tsc".to_string())].into(),
-                config_files: vec![PathBuf::from("/work/project/.pmpx.toml")],
-                files: vec![crate::ContextFile {
-                    name: "package.json".to_string(),
-                    bytes: b"{}".to_vec(),
-                    truncated: false,
-                }],
-            },
-            verb: Verb::Install,
-            args_len: 2,
-        }
-    }
-
-    /// The line a plugin gets from `context()` has to carry what the host actually said, not a
-    /// summary the plugin guessed at -- including the parts only the host knows, like why it picked
-    /// this plugin and what the project config pins.
-    #[test]
-    fn the_context_line_names_what_the_host_said() {
-        let line = describe(&call());
-
-        assert!(line.contains("/work/project"), "{line}");
-        assert!(
-            line.contains("start=/work/project/packages/api"),
-            "the invocation directory has to be there: {line}"
-        );
-        assert!(line.contains("package.json pnpm-lock.yaml"), "{line}");
-        assert!(line.contains("install"), "{line}");
-        assert!(line.contains("args=2"), "{line}");
-        assert!(line.contains("reason=pinned"), "{line}");
-        assert!(line.contains("score=110"), "{line}");
-        assert!(line.contains("node=pnpm"), "{line}");
-        assert!(line.contains("scripts=[build]"), "{line}");
-        assert!(line.contains(".pmpx.toml"), "{line}");
-    }
-
-    /// Without a host -- a plugin's own test run -- everything is wanted, so an author sees their
-    /// own lines.
+    /// Without a host -- a plugin's own test run -- everything is wanted, so an author sees their own
+    /// lines.
     #[test]
     fn without_a_host_every_level_is_wanted() {
         assert!(wants(Level::Error));
@@ -303,5 +208,20 @@ mod tests {
         assert!(Level::Error < Level::Warn);
         assert!(Level::Warn < Level::Info);
         assert!(Level::Info < Level::Debug);
+    }
+
+    /// The description is only current inside a call: a plugin logging outside one prints nothing
+    /// from `context()`.
+    #[test]
+    fn the_call_description_is_scoped() {
+        context();
+
+        with_call("context: inside".to_string(), || {
+            let seen = CURRENT.with(|current| current.borrow().clone());
+            assert_eq!(seen.as_deref(), Some("context: inside"));
+        });
+
+        let after = CURRENT.with(|current| current.borrow().clone());
+        assert!(after.is_none(), "the description must not outlive the call");
     }
 }

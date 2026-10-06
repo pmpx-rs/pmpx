@@ -171,8 +171,9 @@ fn a_manifest_that_lies_about_its_abi_is_reported_but_still_used() {
     let sb = Sandbox::new();
     sb.install_plugin(
         "pmpx-plugin-fakepm",
-        // The library is built against ABI 2; the manifest claims 1.
-        &crate::support::FAKEPM_MANIFEST.replace("abi     = 2", "abi     = 1"),
+        // The library is built against the current ABI; the manifest claims an older one, which is
+        // what a wrapper left behind by an older install looks like.
+        &crate::support::FAKEPM_MANIFEST.replace("abi     = 3", "abi     = 2"),
         Some(&lib),
     );
     sb.file("fakepm.lock");
@@ -187,7 +188,7 @@ fn a_manifest_that_lies_about_its_abi_is_reported_but_still_used() {
     );
     let err = stderr_of(&out);
     assert!(
-        err.contains("declares ABI 1") && err.contains("reports 2"),
+        err.contains("declares ABI 2") && err.contains("reports 3"),
         "the disagreement has to be said out loud: {err}"
     );
 }
@@ -224,7 +225,10 @@ fn a_pinned_plugin_is_told_it_was_pinned() {
         .unwrap_or_else(|| panic!("the plugin logged no context: {err}"));
     assert!(context_line.contains("reason=pinned"), "{context_line}");
     assert!(context_line.contains("faketest=fakepm"), "{context_line}");
-    assert!(context_line.contains("scripts=[build]"), "{context_line}");
+    // `[scripts]` is *not* part of a context, and this is the assertion that keeps it that way: a
+    // script alias is pmpx's own table (it decides what the user's `pmpx build` means), not something
+    // a plugin is handed. The config file the host read still crosses over.
+    assert!(!context_line.contains("scripts="), "{context_line}");
     assert!(context_line.contains(".pmpx.toml"), "{context_line}");
 }
 

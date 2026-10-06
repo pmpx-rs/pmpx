@@ -44,7 +44,7 @@ impl PackageManager for FakePm {
             Verb::Install | Verb::Build | Verb::Test | Verb::Run | Verb::Update => {
                 // What the manifest asked to see, read by the host from the project root: the file
                 // is declared in `[context] files`, and "none" is what a missing one looks like.
-                let declared = ctx.file_str("fakepm.json").unwrap_or("none");
+                let declared = ctx.file_str("fakepm.json").unwrap_or_else(|| "none".to_string());
                 let probe = format!(
                     "pmpx-probe root={} matched={} verb={} args={} start={} reason={} score={} \
                      declared={}",

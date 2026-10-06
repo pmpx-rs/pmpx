@@ -318,7 +318,12 @@ impl Engine {
 | 6 | `pmpx` CLI：薄外壳、`--explain`、`--json`、别名展开 | 端到端测试跑真实二进制；所有人类可见输出都在这个 crate；库依赖守卫通过 |
 | 7 | `pmpx-testkit` + `pmpx plugin new/test` | 插件能对着 fixture 目录、也能对着内存文件表，用真实检测完成测试，代码一屏写得下 |
 
-进度：第 1 步的守卫并入了第 2/3 步（先有 crate，才守得住）。`pmpx-plugin-abi` 已完成；`pmpx-loader` 已完成（能力协商、上下文访问器、调用与复制、错误类型，外加一个真实 cdylib 的 `dlopen` 端到端测试），其中"表"（`Tables`）与"库句柄"（`Plugin`）分开，于是嵌入同进程的宿主或测试不需要 `dlopen` 就能走完全同一条代码路径。**尚未接入宿主**；`pmpx-plugin` v3 待做。接入宿主的那一次提交是唯一一次破版（契约与宿主必须同时切过去）。
+进度：第 1 步的守卫并入了第 2/3 步（先有 crate，才守得住）。
+
+- **第 2、3 步已完成，而且是同一次破版提交完成的**：`pmpx-plugin-abi`（键、能力、C 头、表面快照）、`pmpx-plugin` v3（`export!` 生成能力查找与三张表、类型化 `Context`、`attach` 装日志并**校验表长**）、`pmpx-loader`（协商、调用与复制、错误类型），以及宿主整个切过去。v2 的那套 vtable、`marshal`、`dispatch` 与宿主的 `runtime/backend.rs` 旧实现**全部删除**，没有留下并行路径。
+- loader 里"表"（`Tables`）与"库句柄"（`Plugin`）分开：嵌入同进程的宿主或测试不需要 `dlopen` 就能走完全同一条代码路径；契约自己的测试因此直接用 `Tables` 驱动，不再手搓第二份宿主角色。
+- 迁移中按实际需要调整了三处文档原本的判断：`scripts` 彻底不进上下文（它是宿主的别名表，测试里现在有一条**反向断言**守着它）；`family` 的显示名搬进 CLI（`style::family_label`）；清单声明的 `abi` 降级为**诊断**——真正执法的是 loader 对插件自报主版本的检查，两者不一致时宿主警告而不拒绝（那正是"包装过期的安装"的样子）。
+- 仍然待做：第 4–7 步（`pmpx-project`、`pmpx-detect`、`pmpx-engine`、`pmpx-testkit`）、`[scripts]` 的宿主侧别名实现、`hints.rs` 的删除或外置、`pmpx run` 的 argv 边界，以及发布时的 `pmpx-plugin` 版本号 0.2.1 → 0.3.0。
 
 回滚：第 3–7 步都是追加式搬迁，任何一步都可以在不碰 ABI 的前提下回退。第 2 步不可逆——它之后所有已发布插件都必须重编译，正如 `ABI_VERSION` 1 → 2 已经要求过一次的那样。
 
@@ -328,7 +333,7 @@ impl Engine {
 
 | 守卫 | 检查方式 |
 | --- | --- |
-| 不安全孤岛 | `unsafe` 只出现在 `pmpx-plugin-abi`、`pmpx-loader`，以及 `pmpx-plugin` 的 `export` / `marshal` / `dispatch`；宿主侧 crate 一律 forbid |
+| 不安全孤岛 | `unsafe` 只出现在 `pmpx-plugin-abi`、`pmpx-loader`、`pmpx-plugin` 的 `shell` / `export` / `debug` / `context`（类型化上下文是外壳的另一半，它负责读访问器），以及宿主侧唯一的一处 `runtime/backend.rs`（一次加载调用）与 `runtime/log.rs`（宿主自己导出的两个 C 回调）。CI 用一条 grep 守着（只看真正的代码行，注释里的"unsafe"不算）：其余任何地方出现 `unsafe` 都失败 |
 | 库不打印 | `pmpx-project`、`pmpx-detect`、`pmpx-engine`、`pmpx-plugin`、`pmpx-plugin-abi` 的**直接**依赖里没有 `anstream`、`anstyle`、`clap`、`ureq`、`serde_json`、`tar`、`zip`、`flate2` |
 | 无商店的引擎依旧干净 | 关掉 `store` 特性时，`pmpx-engine` 的依赖树里没有 `crate-plugin-kit` / `ureq` |
 | ABI crate 零依赖 | `pmpx-plugin-abi` 的依赖列表为空 |

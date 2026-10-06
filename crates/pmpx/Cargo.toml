@@ -19,6 +19,10 @@ path = "src/main.rs"
 # The contract crate (an in-workspace path dependency).
 pmpx-plugin.workspace = true
 
+# The host side of the ABI: negotiation, calling, and the typed context. The CLI itself never sees a
+# pointer -- everything below that line is `pmpx-loader`'s business.
+pmpx-loader.workspace = true
+
 # General plugin management library: install / load / cross-process lock / cache. An
 # external dependency, consumed by version.
 crate-plugin-kit.workspace = true
