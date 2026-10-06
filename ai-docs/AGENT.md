@@ -16,6 +16,7 @@
 | 文档 | 一句话 |
 | --- | --- |
 | [`ci-unix-unused-import.md`](ci-unix-unused-import.md) | `no_std` crate 里为 `#[cfg(not(unix))]` 分支加的 `use` 没带门控 → Linux/macOS 的 `-D warnings` 失败，而 Windows 通过；含本地用 `--target x86_64-unknown-linux-gnu` 复现的办法 |
+| [`ci-zero-dep-guard.md`](ci-zero-dep-guard.md) | 零依赖门禁把工作区内的兄弟 crate 当成外部依赖（且它此前一直被更早的编译失败挡着没执行）→ 判定改为"不依赖工作区之外的 crate" |
 
 ## 写作约定
 
