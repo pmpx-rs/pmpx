@@ -16,6 +16,7 @@ pub(super) fn read_one(info: &PluginInfo) -> InstalledPlugin {
     let (strong, weak) = detect_patterns(info);
 
     InstalledPlugin {
+        info: info.clone(),
         name: info.name.clone(),
         crate_name: info.crate_name.clone(),
         version: info.version.clone(),

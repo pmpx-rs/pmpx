@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use crate_plugin_kit::CratePluginKit;
+use crate_plugin_kit::{CratePluginKit, PluginInfo};
 use pmpx_plugin::abi::PmpxPlugin;
 use pmpx_plugin::Family;
 
@@ -19,9 +19,22 @@ mod manifest;
 
 use self::manifest::read_one;
 
-/// Manifest information of one installed plugin.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One installed plugin, as this host sees it.
+///
+/// # Why both `info` and the fields below
+///
+/// This is the first half of a two-step change: [`PluginInfo`] is the whole of what the kit read from
+/// the manifest -- host sections (`[detect]`, `[context]`, and anything a later version adds) included --
+/// and it is kept here so nothing is thrown away. The fields below are still the copies this host reads,
+/// because changing every reader of them is the second half; when that lands, they go and
+/// [`InstalledPlugin::name`] and friends take their place.
+///
+/// No `PartialEq`: the kit's [`PluginInfo`] has none.
+#[derive(Debug, Clone)]
 pub struct InstalledPlugin {
+    /// What the kit read from the manifest, in full.
+    pub info: PluginInfo,
+
     /// The plugin's self-reported name (the manifest's `plugin.name`, e.g. `pnpm`).
     ///
     /// The manifest is the authority for this name; after loading, `PackageManager::name()` must
