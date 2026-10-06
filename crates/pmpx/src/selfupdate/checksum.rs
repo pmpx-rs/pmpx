@@ -29,7 +29,12 @@ pub(super) fn parse_sha256sums(text: &str, file: &str) -> Option<String> {
             continue;
         }
 
-        let (hash, rest) = line.split_once(char::is_whitespace)?;
+        // A line with no whitespace at all is just another unparseable line: skip it and keep
+        // looking, exactly like the two cases below. (`?` here used to end the whole search, so a
+        // single stray line made pmpx report "this release has nothing for your platform".)
+        let Some((hash, rest)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
         if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
             continue;
         }
@@ -87,6 +92,26 @@ b546e4e4c085b5f3699220f8f1dee442bd65d389f0930e376f37ac5effa99df0  pmpx-x86_64-un
             parse_sha256sums(text, "pmpx-x86_64-unknown-linux-gnu.tar.gz"),
             None
         );
+    }
+
+    /// A stray line with no whitespace at all must not end the search: the wanted entry is still
+    /// further down the file, and stopping early would report "this release has nothing for your
+    /// platform" for a release that has it.
+    #[test]
+    fn sums_keeps_looking_past_a_line_without_whitespace() {
+        let text = "\
+binary
+b546e4e4c085b5f3699220f8f1dee442bd65d389f0930e376f37ac5effa99df0  pmpx-x86_64-unknown-linux-gnu.tar.gz
+";
+        assert_eq!(
+            parse_sha256sums(text, "pmpx-x86_64-unknown-linux-gnu.tar.gz").as_deref(),
+            Some("b546e4e4c085b5f3699220f8f1dee442bd65d389f0930e376f37ac5effa99df0")
+        );
+    }
+
+    #[test]
+    fn sums_of_only_stray_lines_finds_nothing() {
+        assert_eq!(parse_sha256sums("binary\nlines\n", "anything"), None);
     }
 
     #[test]
