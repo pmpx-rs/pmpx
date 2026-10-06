@@ -187,6 +187,7 @@ impl PmpxHostV1 {
 }
 
 /// One `family = "plugin"` pin from a `.pmpx.toml`.
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct PmpxPin {
     /// Family name, the same key `.pmpx.toml` uses.
@@ -197,6 +198,7 @@ pub struct PmpxPin {
 
 /// One `key = "value"` pair -- the project config's `[scripts]`, which the host parses and does not
 /// interpret.
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct PmpxKeyValue {
     /// Key.
@@ -206,6 +208,7 @@ pub struct PmpxKeyValue {
 }
 
 /// The contents of one file a plugin asked for in its manifest's `[context] files`.
+#[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct PmpxFile {
     /// Path relative to the project root, as the manifest declared it.

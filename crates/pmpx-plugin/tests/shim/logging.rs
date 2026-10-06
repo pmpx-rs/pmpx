@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use pmpx_plugin::abi::{self, PmpxHostV1, PmpxStr, PMPX_LEVEL_DEBUG, PMPX_LEVEL_WARN};
 use pmpx_plugin::Verb;
 
-use crate::support::{call_command, entry, read};
+use crate::support::{call_command, entry, read, TEST_CONFIG, TEST_SCORE, TEST_START_DIR};
 
 /// What the "host" was told. `level:message`, so the level is asserted too.
 static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -74,9 +74,19 @@ fn the_context_can_be_logged_in_one_line() {
     assert_eq!(seen.len(), 1, "context() prints exactly once: {seen:?}");
     let line = &seen[0];
 
-    assert!(line.contains("/proj"), "{line}");
+    assert!(line.contains("root=/proj"), "{line}");
     assert!(line.contains("package.json"), "{line}");
-    assert!(line.contains("run"), "{line}");
+    assert!(line.contains("verb=run"), "{line}");
+
+    // And everything the host filled in beyond the root and the matched files: the invocation
+    // directory, the reason it picked this plugin, the score, the pins, the scripts, and the
+    // configs that were read.
+    assert!(line.contains(&format!("start={TEST_START_DIR}")), "{line}");
+    assert!(line.contains("reason=pinned"), "{line}");
+    assert!(line.contains(&format!("score={TEST_SCORE}")), "{line}");
+    assert!(line.contains("node=fakepm"), "{line}");
+    assert!(line.contains("scripts=[build]"), "{line}");
+    assert!(line.contains(TEST_CONFIG), "{line}");
 }
 
 /// Detaching the hooks puts the plugin back on its own stderr, which is what a plugin's own test

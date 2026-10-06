@@ -50,7 +50,7 @@ mod manager;
 mod spec;
 mod verb;
 
-pub use context::Context;
+pub use context::{Context, SelectionReason};
 pub use error::PluginError;
 pub use family::Family;
 pub use manager::PackageManager;

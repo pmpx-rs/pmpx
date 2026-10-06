@@ -20,7 +20,7 @@ mod error;
 mod log;
 mod strings;
 
-pub use backend::Backend;
+pub use backend::{Backend, Invocation};
 pub use error::BackendError;
 pub(crate) use log::{hooks, set_current_plugin};
 

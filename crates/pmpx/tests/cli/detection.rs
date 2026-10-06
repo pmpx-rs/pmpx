@@ -108,6 +108,73 @@ fn the_plugin_receives_root_matched_verb_and_args_across_the_boundary() {
     assert!(line.contains("verb=build"), "{line}");
     // args: the host side passed no arguments for build
     assert!(line.contains("args="), "{line}");
+
+    // The invocation directory: the plugin is run from inside the project here, so it is the project
+    // directory itself -- while the field exists precisely for the case where it is not.
+    let got_start = line
+        .split_once("start=")
+        .and_then(|(_, rest)| rest.split_once(" reason="))
+        .map(|(start, _)| start)
+        .unwrap_or_else(|| panic!("the echo has no start=: {line}"));
+    let got = std::fs::canonicalize(got_start)
+        .unwrap_or_else(|e| panic!("start_dir cannot be resolved ({got_start}): {e}"));
+    assert_eq!(got, want, "start_dir was passed wrongly: {line}");
+
+    // Why this plugin is the one being asked, and with what evidence: nobody pinned it and `-p`
+    // did not name it, so it won on its score -- 100 for the lockfile plus 10 for the weak
+    // `fakepm.json` this test also created.
+    assert!(line.contains("reason=scored"), "{line}");
+    assert!(line.contains("score=110"), "{line}");
+}
+
+/// A `.pmpx.toml` pin is reported to the plugin as the reason it was selected -- the plugin cannot
+/// work that out for itself, and it is also how someone holds a plugin back on purpose.
+#[test]
+fn a_pinned_plugin_is_told_it_was_pinned() {
+    let (sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+    sb.file(".pmpx.toml");
+    std::fs::write(
+        sb.project.join(".pmpx.toml"),
+        "[plugin]\nfaketest = \"fakepm\"\n\n[scripts]\nbuild = \"fakepm run build\"\n",
+    )
+    .unwrap();
+
+    let out = sb.run(&["--debug", "build"]);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+
+    let stdout = stdout_of(&out);
+    let line = stdout.lines().find(|l| l.contains("pmpx-probe")).unwrap();
+    assert!(line.contains("reason=pinned"), "{line}");
+    // A pin still carries the plugin's own evidence score: it is the pin that decided, not the
+    // score, but the plugin was never asked to pretend otherwise.
+    assert!(line.contains("score=100"), "{line}");
+
+    // And the whole context the fixture plugin logged: the pin, the script and the config file that
+    // was read all crossed the boundary, not just the reason.
+    let err = stderr_of(&out);
+    let context_line = err
+        .lines()
+        .find(|l| l.contains("[fakepm] context:"))
+        .unwrap_or_else(|| panic!("the plugin logged no context: {err}"));
+    assert!(context_line.contains("reason=pinned"), "{context_line}");
+    assert!(context_line.contains("faketest=fakepm"), "{context_line}");
+    assert!(context_line.contains("scripts=[build]"), "{context_line}");
+    assert!(context_line.contains(".pmpx.toml"), "{context_line}");
+}
+
+/// `-p` overrides everything, including a pin, and the plugin is told that too.
+#[test]
+fn a_plugin_named_with_dash_p_is_told_it_was_explicit() {
+    let (sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+
+    let out = sb.ok(&["-p", "fakepm", "build"]);
+    let line = out.lines().find(|l| l.contains("pmpx-probe")).unwrap();
+
+    assert!(line.contains("reason=explicit"), "{line}");
+    // Nothing had to be weighed, so there is no score to report.
+    assert!(line.contains("score=0"), "{line}");
 }
 
 /// Arguments after `--` have to reach the backend verbatim.

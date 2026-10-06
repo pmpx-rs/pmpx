@@ -3,8 +3,10 @@
 //!
 //! This logic lives here rather than inside the `export!` macro so that it can be tested directly.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::context::SelectionReason;
 use crate::{CommandSpec, Context, PackageManager, Verb};
 
 use super::marshal::{free_str, leak_bytes, leak_str, os_to_bytes, read_os, read_str};
@@ -103,16 +105,24 @@ pub unsafe fn dispatch_command(
 
     // A length without an array is not "empty": reading it would be undefined behaviour, and a
     // bogus length would allocate before the first element is even touched. `pmpx` always passes a
-    // real pointer -- it builds both arrays from `Vec`s -- but the whole point of this shell is not
+    // real pointer -- it builds every array from a `Vec` -- but the whole point of this shell is not
     // to assume that. (A length *larger* than the caller's array cannot be detected here, which is
     // why the `command` contract puts that on the caller.)
-    if (context.matched_len > 0 && context.matched.is_null())
-        || (context.args_len > 0 && context.args.is_null())
-    {
+    let arrays = [
+        (context.matched_len, context.matched.cast::<()>()),
+        (context.args_len, context.args.cast::<()>()),
+        (context.pins_len, context.pins.cast::<()>()),
+        (context.scripts_len, context.scripts.cast::<()>()),
+        (context.config_paths_len, context.config_paths.cast::<()>()),
+    ];
+    if arrays.iter().any(|(len, ptr)| *len > 0 && ptr.is_null()) {
         return PMPX_ERR_INVALID_ARGS;
     }
 
     let project_root = PathBuf::from(unsafe { read_os(context.root) });
+
+    // A path, so not necessarily UTF-8: read as bytes and build the `PathBuf` directly.
+    let start_dir = PathBuf::from(unsafe { read_os(context.start_dir) });
 
     // `matched` is text (file names declared in the manifest), so UTF-8 is checked here.
     let mut matched_names = Vec::with_capacity(context.matched_len);
@@ -131,9 +141,46 @@ pub unsafe fn dispatch_command(
         arg_list.push(unsafe { read_os(raw) });
     }
 
+    // The config's own vocabulary is text: a family, a plugin name, a script name and its body.
+    let mut pins = BTreeMap::new();
+    for i in 0..context.pins_len {
+        let raw = unsafe { *context.pins.add(i) };
+        match (unsafe { read_str(raw.family) }, unsafe {
+            read_str(raw.plugin)
+        }) {
+            (Ok(family), Ok(plugin)) => {
+                pins.insert(family.to_string(), plugin.to_string());
+            }
+            _ => return PMPX_ERR_INVALID_ARGS,
+        }
+    }
+
+    let mut scripts = BTreeMap::new();
+    for i in 0..context.scripts_len {
+        let raw = unsafe { *context.scripts.add(i) };
+        match (unsafe { read_str(raw.key) }, unsafe { read_str(raw.value) }) {
+            (Ok(key), Ok(value)) => {
+                scripts.insert(key.to_string(), value.to_string());
+            }
+            _ => return PMPX_ERR_INVALID_ARGS,
+        }
+    }
+
+    let mut config_files = Vec::with_capacity(context.config_paths_len);
+    for i in 0..context.config_paths_len {
+        let raw = unsafe { *context.config_paths.add(i) };
+        config_files.push(PathBuf::from(unsafe { read_os(raw) }));
+    }
+
     let context = Context {
         project_root,
+        start_dir,
         matched: matched_names,
+        reason: SelectionReason::from_abi(context.reason),
+        score: context.score,
+        pins,
+        scripts,
+        config_files,
     };
 
     // Bracketed so that anything the plugin logs can say what it was working with -- and so that a

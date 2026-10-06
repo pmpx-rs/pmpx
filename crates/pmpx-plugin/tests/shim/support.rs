@@ -3,7 +3,9 @@
 
 use std::ffi::OsString;
 
-use pmpx_plugin::abi::{self, PmpxCommand, PmpxContextV1, PmpxPluginV1, PmpxStr};
+use pmpx_plugin::abi::{
+    self, PmpxCommand, PmpxContextV1, PmpxKeyValue, PmpxPin, PmpxPluginV1, PmpxStr,
+};
 use pmpx_plugin::{CommandSpec, Verb};
 
 use crate::pmpx_plugin_entry_v1;
@@ -25,41 +27,94 @@ pub(crate) fn entry() -> &'static PmpxPluginV1 {
     unsafe { &*pmpx_plugin_entry_v1() }
 }
 
-/// Build the context a host would hand over: the arguments as borrowed views, so it stays valid
-/// for exactly as long as the borrows do.
-pub(crate) fn context<'a>(
-    root: &'a str,
-    matched: &'a [&'a str],
-    verb: u32,
-    args: &'a [&'a str],
-) -> (PmpxContextV1, Vec<PmpxStr>, Vec<PmpxStr>) {
-    let matched_raw: Vec<PmpxStr> = matched
-        .iter()
-        .map(|s| PmpxStr {
+/// The values [`context`] fills in for the parts a plugin only ever reads.
+///
+/// Exposed so the assertions and the setup cannot drift apart.
+pub(crate) const TEST_START_DIR: &str = "/work/packages/api";
+pub(crate) const TEST_PINS: &[(&str, &str)] = &[("node", "fakepm")];
+pub(crate) const TEST_SCRIPTS: &[(&str, &str)] = &[("build", "fakepm run build")];
+pub(crate) const TEST_CONFIG: &str = "/work/.pmpx.toml";
+pub(crate) const TEST_REASON: u32 = abi::PMPX_REASON_PINNED;
+pub(crate) const TEST_SCORE: u32 = 110;
+
+/// A context plus the storage its views point at.
+///
+/// The arrays must outlive the call, so they are owned here rather than being temporaries in
+/// [`context`]; everything else points at `'static` literals or at the caller's own strings.
+pub(crate) struct TestContext {
+    raw: PmpxContextV1,
+    _matched: Vec<PmpxStr>,
+    _args: Vec<PmpxStr>,
+    _pins: Vec<PmpxPin>,
+    _scripts: Vec<PmpxKeyValue>,
+    _config: Vec<PmpxStr>,
+}
+
+impl TestContext {
+    /// The pointer to hand to `command`: valid while this value is alive.
+    pub(crate) fn ptr(&self) -> *const PmpxContextV1 {
+        &self.raw
+    }
+
+    /// For the tests that hand the plugin a broken context on purpose.
+    pub(crate) fn raw_mut(&mut self) -> &mut PmpxContextV1 {
+        &mut self.raw
+    }
+}
+
+/// Build the context a host would hand over: root, matched files and args borrowed from the caller,
+/// and the parts a plugin only reads filled with the `TEST_*` values.
+pub(crate) fn context(root: &str, matched: &[&str], verb: u32, args: &[&str]) -> TestContext {
+    fn view(s: &str) -> PmpxStr {
+        PmpxStr {
             ptr: s.as_ptr(),
             len: s.len(),
-        })
-        .collect();
-    let args_raw: Vec<PmpxStr> = args
+        }
+    }
+
+    let matched_raw: Vec<PmpxStr> = matched.iter().map(|s| view(s)).collect();
+    let args_raw: Vec<PmpxStr> = args.iter().map(|s| view(s)).collect();
+    let pins: Vec<PmpxPin> = TEST_PINS
         .iter()
-        .map(|s| PmpxStr {
-            ptr: s.as_ptr(),
-            len: s.len(),
+        .map(|(family, plugin)| PmpxPin {
+            family: view(family),
+            plugin: view(plugin),
         })
         .collect();
+    let scripts: Vec<PmpxKeyValue> = TEST_SCRIPTS
+        .iter()
+        .map(|(key, value)| PmpxKeyValue {
+            key: view(key),
+            value: view(value),
+        })
+        .collect();
+    let config: Vec<PmpxStr> = std::iter::once(view(TEST_CONFIG)).collect();
 
-    let mut ctx = PmpxContextV1::empty();
-    ctx.root = PmpxStr {
-        ptr: root.as_ptr(),
-        len: root.len(),
-    };
-    ctx.matched = matched_raw.as_ptr();
-    ctx.matched_len = matched_raw.len();
-    ctx.verb = verb;
-    ctx.args = args_raw.as_ptr();
-    ctx.args_len = args_raw.len();
+    let mut raw = PmpxContextV1::empty();
+    raw.root = view(root);
+    raw.start_dir = view(TEST_START_DIR);
+    raw.matched = matched_raw.as_ptr();
+    raw.matched_len = matched_raw.len();
+    raw.verb = verb;
+    raw.reason = TEST_REASON;
+    raw.score = TEST_SCORE;
+    raw.args = args_raw.as_ptr();
+    raw.args_len = args_raw.len();
+    raw.pins = pins.as_ptr();
+    raw.pins_len = pins.len();
+    raw.scripts = scripts.as_ptr();
+    raw.scripts_len = scripts.len();
+    raw.config_paths = config.as_ptr();
+    raw.config_paths_len = config.len();
 
-    (ctx, matched_raw, args_raw)
+    TestContext {
+        raw,
+        _matched: matched_raw,
+        _args: args_raw,
+        _pins: pins,
+        _scripts: scripts,
+        _config: config,
+    }
 }
 
 /// Call `command` once, copy the result into Rust values, then free the plugin's memory per the
@@ -74,13 +129,13 @@ pub(crate) fn call_command(
 
     // The verb is either a real number or a deliberately out-of-range one.
     let verb_code = verb.map(Verb::to_abi).unwrap_or(99);
-    let (ctx, _matched_raw, _args_raw) = context(root, matched, verb_code, args);
+    let context = context(root, matched, verb_code, args);
 
     let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
 
-    // SAFETY: the context borrows arrays allocated by this function and stays alive for the call;
-    // out points at local writable memory.
-    let code = unsafe { (e.command)(&ctx as *const PmpxContextV1, out.as_mut_ptr()) };
+    // SAFETY: the context owns every array it points at and stays alive for the call; out points at
+    // local writable memory.
+    let code = unsafe { (e.command)(context.ptr(), out.as_mut_ptr()) };
 
     if code != abi::PMPX_OK {
         return Err(code);

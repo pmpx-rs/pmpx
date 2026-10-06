@@ -123,13 +123,37 @@ pub(crate) fn with_call<T>(call: Call, f: impl FnOnce() -> T) -> T {
 }
 
 /// One line describing a call, as `context()` prints it.
+///
+/// Everything the host said, in the host's own words -- including the reason it picked this plugin
+/// and what the project config pins, which a plugin cannot work out for itself.
 fn describe(call: &Call) -> String {
+    let ctx = &call.context;
+
+    let pins: Vec<String> = ctx
+        .pins
+        .iter()
+        .map(|(family, plugin)| format!("{family}={plugin}"))
+        .collect();
+    let scripts: Vec<&str> = ctx.scripts.keys().map(String::as_str).collect();
+    let configs: Vec<String> = ctx
+        .config_files
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+
     format!(
-        "context: root={} matched=[{}] verb={} args={}",
-        call.context.project_root.display(),
-        call.context.matched.join(" "),
+        "context: root={} start={} matched=[{}] verb={} args={} reason={} score={} pins=[{}] \
+         scripts=[{}] config=[{}]",
+        ctx.project_root.display(),
+        ctx.start_dir.display(),
+        ctx.matched.join(" "),
         call.verb,
-        call.args_len
+        call.args_len,
+        ctx.reason,
+        ctx.score,
+        pins.join(" "),
+        scripts.join(" "),
+        configs.join(" "),
     )
 }
 
@@ -212,7 +236,13 @@ mod tests {
         Call {
             context: Context {
                 project_root: PathBuf::from("/work/project"),
+                start_dir: PathBuf::from("/work/project/packages/api"),
                 matched: vec!["package.json".to_string(), "pnpm-lock.yaml".to_string()],
+                reason: crate::SelectionReason::Pinned,
+                score: 110,
+                pins: [("node".to_string(), "pnpm".to_string())].into(),
+                scripts: [("build".to_string(), "tsc".to_string())].into(),
+                config_files: vec![PathBuf::from("/work/project/.pmpx.toml")],
             },
             verb: Verb::Install,
             args_len: 2,
@@ -220,15 +250,25 @@ mod tests {
     }
 
     /// The line a plugin gets from `context()` has to carry what the host actually said, not a
-    /// summary the plugin guessed at.
+    /// summary the plugin guessed at -- including the parts only the host knows, like why it picked
+    /// this plugin and what the project config pins.
     #[test]
-    fn the_context_line_names_root_matched_verb_and_args() {
+    fn the_context_line_names_what_the_host_said() {
         let line = describe(&call());
 
         assert!(line.contains("/work/project"), "{line}");
+        assert!(
+            line.contains("start=/work/project/packages/api"),
+            "the invocation directory has to be there: {line}"
+        );
         assert!(line.contains("package.json pnpm-lock.yaml"), "{line}");
         assert!(line.contains("install"), "{line}");
         assert!(line.contains("args=2"), "{line}");
+        assert!(line.contains("reason=pinned"), "{line}");
+        assert!(line.contains("score=110"), "{line}");
+        assert!(line.contains("node=pnpm"), "{line}");
+        assert!(line.contains("scripts=[build]"), "{line}");
+        assert!(line.contains(".pmpx.toml"), "{line}");
     }
 
     /// Without a host -- a plugin's own test run -- everything is wanted, so an author sees their

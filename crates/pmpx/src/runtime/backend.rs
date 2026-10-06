@@ -1,13 +1,14 @@
 //! The loaded plugin: one `dlopen` handle, one validated vtable, and every call that goes through
 //! it.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate_plugin_kit::{CratePluginKit, LoadedPlugin};
 use pmpx_plugin::abi::{
-    self, PmpxCommand, PmpxContextV1, PmpxPluginV1, PmpxStr, ABI_VERSION, PMPX_ERR_INTERNAL,
-    PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_OK,
+    self, PmpxCommand, PmpxContextV1, PmpxKeyValue, PmpxPin, PmpxPluginV1, PmpxStr, ABI_VERSION,
+    PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_OK,
 };
 use pmpx_plugin::{CommandSpec, Verb};
 
@@ -27,6 +28,29 @@ pub struct Backend {
     loaded: LoadedPlugin<PmpxPluginV1>,
     /// The plugin name declared in the manifest.
     pub name: String,
+}
+
+/// Everything one call needs that the plugin cannot work out for itself.
+///
+/// A borrowed view of the run's own state, assembled at the call site: the plugin reads it through
+/// the ABI, and nothing here is copied for the host's own benefit.
+pub struct Invocation<'a> {
+    /// Project root: where the command runs unless the answer names a `cwd` of its own.
+    pub root: &'a Path,
+    /// The directory the person ran pmpx from -- **not** where the command will run.
+    pub start_dir: &'a Path,
+    /// The files the winning plugin's detection matched.
+    pub matched: &'a [String],
+    /// Why this plugin was selected.
+    pub reason: pmpx_plugin::SelectionReason,
+    /// The score it won with.
+    pub score: u32,
+    /// `[plugin]` pins from the project config.
+    pub pins: &'a BTreeMap<String, String>,
+    /// `[scripts]` from the project config.
+    pub scripts: &'a BTreeMap<String, String>,
+    /// The `.pmpx.toml` files that were read, nearest first.
+    pub config_files: &'a [PathBuf],
 }
 
 impl Backend {
@@ -140,12 +164,13 @@ impl Backend {
     /// fault.
     pub fn command(
         &self,
-        project_root: &Path,
-        matched: &[String],
+        invocation: &Invocation<'_>,
         verb: Verb,
         args: &[OsString],
     ) -> Result<std::result::Result<CommandSpec, BackendError>> {
         let entry = self.entry();
+        let project_root = invocation.root;
+        let matched = invocation.matched;
 
         // ---------------------------------------------------------------
         // Input direction: allocated by the host, freed by the host, read-only for the
@@ -193,16 +218,69 @@ impl Backend {
             cwd: PmpxStr::EMPTY,
         };
 
-        // Everything the host knows about this call, in one struct the plugin reads: the fields it
-        // has nothing for stay empty, which reads as "the host does not know this" rather than as
+        // Everything the host knows about this call, in one struct the plugin reads. What the host
+        // has nothing for stays empty, which reads as "the host does not know this" rather than as
         // an error.
+        //
+        // Every view here points either at those `Vec`s (which live until the end of this function)
+        // or straight into the session's own config maps, which outlive the call.
+        let start_bytes = abi::os_to_bytes(invocation.start_dir.as_os_str());
+        let config_bytes: Vec<Vec<u8>> = invocation
+            .config_files
+            .iter()
+            .map(|path| abi::os_to_bytes(path.as_os_str()))
+            .collect();
+
+        let text = |s: &str| PmpxStr {
+            ptr: s.as_ptr(),
+            len: s.len(),
+        };
+
+        let pins_raw: Vec<PmpxPin> = invocation
+            .pins
+            .iter()
+            .map(|(family, plugin)| PmpxPin {
+                family: text(family),
+                plugin: text(plugin),
+            })
+            .collect();
+
+        let scripts_raw: Vec<PmpxKeyValue> = invocation
+            .scripts
+            .iter()
+            .map(|(key, value)| PmpxKeyValue {
+                key: text(key),
+                value: text(value),
+            })
+            .collect();
+
+        let config_raw: Vec<PmpxStr> = config_bytes
+            .iter()
+            .map(|b| PmpxStr {
+                ptr: b.as_ptr(),
+                len: b.len(),
+            })
+            .collect();
+
         let mut context = PmpxContextV1::empty();
         context.root = root;
+        context.start_dir = PmpxStr {
+            ptr: start_bytes.as_ptr(),
+            len: start_bytes.len(),
+        };
         context.matched = matched_raw.as_ptr();
         context.matched_len = matched_raw.len();
         context.verb = verb.to_abi();
+        context.reason = invocation.reason.to_abi();
+        context.score = invocation.score;
         context.args = args_raw.as_ptr();
         context.args_len = args_raw.len();
+        context.pins = pins_raw.as_ptr();
+        context.pins_len = pins_raw.len();
+        context.scripts = scripts_raw.as_ptr();
+        context.scripts_len = scripts_raw.len();
+        context.config_paths = config_raw.as_ptr();
+        context.config_paths_len = config_raw.len();
 
         let code = {
             let out_ptr = &mut cmd as *mut PmpxCommand;

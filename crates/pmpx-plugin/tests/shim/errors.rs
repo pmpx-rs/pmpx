@@ -25,11 +25,10 @@ fn an_unknown_verb_number_is_rejected() {
 #[test]
 fn a_null_out_pointer_is_rejected() {
     let e = entry();
-    let (ctx, _matched_raw, _args_raw) =
-        crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
+    let ctx = crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
 
     // SAFETY: null is passed on purpose here, precisely so that it gets rejected.
-    let code = unsafe { (e.command)(&ctx as *const _, std::ptr::null_mut()) };
+    let code = unsafe { (e.command)(ctx.ptr(), std::ptr::null_mut()) };
     assert_eq!(code, abi::PMPX_ERR_INVALID_ARGS);
 }
 
@@ -56,16 +55,16 @@ fn a_null_array_with_a_length_is_rejected() {
     let mut out = std::mem::MaybeUninit::<pmpx_plugin::abi::PmpxCommand>::uninit();
 
     for (matched_len, args_len) in [(0, 1), (1, 0)] {
-        let (mut ctx, _matched_raw, _args_raw) =
-            crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
-        ctx.matched = std::ptr::null();
-        ctx.matched_len = matched_len;
-        ctx.args = std::ptr::null();
-        ctx.args_len = args_len;
+        let mut ctx = crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
+        let raw = ctx.raw_mut();
+        raw.matched = std::ptr::null();
+        raw.matched_len = matched_len;
+        raw.args = std::ptr::null();
+        raw.args_len = args_len;
 
         // SAFETY: `out` is writable, and the null arrays are exactly what is being rejected --
         // nothing on this side reads them.
-        let code = unsafe { (e.command)(&ctx as *const _, out.as_mut_ptr()) };
+        let code = unsafe { (e.command)(ctx.ptr(), out.as_mut_ptr()) };
 
         assert_eq!(
             code,
@@ -80,13 +79,12 @@ fn a_null_array_with_a_length_is_rejected() {
 #[test]
 fn a_context_smaller_than_this_build_is_rejected() {
     let e = entry();
-    let (mut ctx, _matched_raw, _args_raw) =
-        crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
-    ctx.size -= 1;
+    let mut ctx = crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
+    ctx.raw_mut().size -= 1;
     let mut out = std::mem::MaybeUninit::<pmpx_plugin::abi::PmpxCommand>::uninit();
 
     // SAFETY: the context is valid apart from the size it claims, which is the point.
-    let code = unsafe { (e.command)(&ctx as *const _, out.as_mut_ptr()) };
+    let code = unsafe { (e.command)(ctx.ptr(), out.as_mut_ptr()) };
 
     assert_eq!(code, abi::PMPX_ERR_INVALID_ARGS);
 }

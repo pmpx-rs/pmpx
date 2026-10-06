@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use pmpx_plugin::Family;
+use pmpx_plugin::{Family, SelectionReason};
 
 use super::failure::DetectFailure;
 use super::{score_all, FamilyScore, ScoredPlugin};
@@ -30,6 +30,10 @@ pub struct Selection {
     pub family: Family,
     /// The winning plugin's score (for `info`).
     pub score: u32,
+
+    /// How this plugin got picked: on evidence, by a `.pmpx.toml` pin, or by `-p`. The plugin is
+    /// told, because "why am I the one being asked" is something only the host knows.
+    pub reason: SelectionReason,
     /// The files matching the winning plugin, relative to the project root — exactly what is
     /// handed to it as [`pmpx_plugin::Context::matched`].
     ///
@@ -135,6 +139,7 @@ fn decide(
             name: plugin.name.clone(),
             family,
             score: 0,
+            reason: SelectionReason::Explicit,
             matched: matched_files(&ScoredPlugin::score(plugin, root)),
             // `-p` is what the user explicitly asked for; there is no ambiguity to flag
             notes: Vec::new(),
@@ -190,6 +195,7 @@ fn decide(
                 name: p.name.clone(),
                 family: winner.family.clone(),
                 score: p.score,
+                reason: SelectionReason::Pinned,
                 matched: matched_files(p),
                 notes,
             });
@@ -254,6 +260,7 @@ fn decide(
         name: best.name.clone(),
         family: winner.family.clone(),
         score: best.score,
+        reason: SelectionReason::Scored,
         matched: matched_files(best),
         notes,
     })

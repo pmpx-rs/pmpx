@@ -9,7 +9,7 @@ use pmpx_plugin::Verb;
 use super::Session;
 use crate::debug;
 use crate::error::{PmpxError, Result};
-use crate::runtime::BackendError;
+use crate::runtime::{BackendError, Invocation};
 use crate::spawn;
 
 /// Run one verb all the way: resolve -> load -> ask the plugin -> spawn -> pass the exit
@@ -55,7 +55,20 @@ pub fn run_verb(
     // The evidence the plugin is given is the evidence that selected it -- carried by the
     // resolution itself, not re-read from the filesystem here.
     let t = debug::now();
-    let answer = backend.command(&root, &selection.matched, verb, args);
+    // The plugin is told the same facts the host decided on: the evidence that selected it, why it
+    // was the one selected, and the project config as it was read. Assembled here rather than
+    // re-derived over there.
+    let invocation = Invocation {
+        root: &root,
+        start_dir: &session.start_dir,
+        matched: &selection.matched,
+        reason: selection.reason,
+        score: selection.score,
+        pins: &session.project.plugin,
+        scripts: &session.project.scripts,
+        config_files: &session.project.sources,
+    };
+    let answer = backend.command(&invocation, verb, args);
     // Pure mapping on the other side of the ABI: no file is read and no process is started
     // here, so this is the cost of the call itself, not of what it decides.
     debug::done("plugin.command", t, || verb.to_string());

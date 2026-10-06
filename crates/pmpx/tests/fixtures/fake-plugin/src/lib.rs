@@ -30,22 +30,30 @@ impl PackageManager for FakePm {
         args: &[OsString],
     ) -> Result<CommandSpec, PluginError> {
         // The end-to-end proof that a plugin's own logging reaches the host: pmpx adds the id, and
-        // only prints it when a trace was asked for.
+        // only prints it when a trace was asked for. The context line is the other half -- it shows
+        // what the host actually handed over, so a test can assert on the whole struct rather than
+        // on one field at a time.
         pmpx_plugin::debug!("mapping {verb} with {} matched file(s)", ctx.matched.len());
+        pmpx_plugin::debug::context();
 
         match verb {
             // A command that is guaranteed to succeed and echo back: the tests assert with it
-            // that the root / matched / args crossing the boundary are correct.
+            // that the root / matched / args crossing the boundary are correct, and that the parts
+            // only the host knows (where the person ran from, and why this plugin was picked) got
+            // there too.
             Verb::Install | Verb::Build | Verb::Test | Verb::Run | Verb::Update => {
                 let probe = format!(
-                    "pmpx-probe root={} matched={} verb={} args={}",
+                    "pmpx-probe root={} matched={} verb={} args={} start={} reason={} score={}",
                     ctx.project_root.display(),
                     ctx.matched.join("|"),
                     verb,
                     args.iter()
                         .map(|a| a.to_string_lossy().into_owned())
                         .collect::<Vec<_>>()
-                        .join(",")
+                        .join(","),
+                    ctx.start_dir.display(),
+                    ctx.reason,
+                    ctx.score,
                 );
 
                 // `echo` exists on both platforms, but on Windows it has to be the cmd builtin
