@@ -147,3 +147,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" SHA256SUMS --clobber
+
+      # `gh release upload` returns non-zero on failure, so a transient error here already
+      # fails the job. What it does NOT catch is a missing asset: the upload can succeed
+      # and the asset can then silently disappear (race with another runner, the release
+      # being recreated by a re-run, etc.). One last query, before the job claims success,
+      # makes "SHA256SUMS is on the tag" a structural fact rather than a hopeful one --
+      # without it, every install script on every machine throws a 404 that blames the
+      # archive instead of the checksum file.
+      - name: Confirm SHA256SUMS is on the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          gh release view "$tag" --json assets --jq '.assets[].name' \
+            | grep -Fxq SHA256SUMS \
+            || { echo "::error::SHA256SUMS is not on release $tag; the download path cannot verify against it." >&2; exit 1; }

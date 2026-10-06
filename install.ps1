@@ -51,12 +51,20 @@ function Get-Target {
 
 # `WebClient` instead of `Invoke-WebRequest`: the cmdlet's behaviour around basic parsing
 # differs between Windows PowerShell and PowerShell 7, and a download needs none of it.
+#
+# The catch turns a raw "The remote server returned an error: (404) Not Found" into one that
+# names the URL that 404'd -- without that, a failure on SHA256SUMS looks like a failure on
+# the archive (which is downloaded first in the caller) and sends users chasing the wrong
+# problem.
 function Save-Url {
     param([string]$Url, [string]$Destination)
 
     $client = New-Object System.Net.WebClient
     try {
         $client.DownloadFile($Url, $Destination)
+    }
+    catch {
+        throw "cannot download $Url`: $($_.Exception.Message)"
     }
     finally {
         $client.Dispose()
@@ -99,14 +107,27 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "pmpx-install-$([guid]::NewGu
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 try {
-    Write-Host "Downloading $Base/$Version/$Archive"
-    $archivePath = Join-Path $tmp $Archive
-    Save-Url -Url "$Base/$Version/$Archive" -Destination $archivePath
+    # 1. SHA256SUMS first: the archive is verified against it, and without it there is nothing
+    #    to verify against. A missing SHA256SUMS means the release is incomplete -- the
+    #    archive may well be there, but this script must not install unverified bytes.
     $sumsPath = Join-Path $tmp 'SHA256SUMS'
-    Save-Url -Url "$Base/$Version/SHA256SUMS" -Destination $sumsPath
+    $sumsUrl = "$Base/$Version/SHA256SUMS"
+    Write-Host "Downloading $sumsUrl"
+    try {
+        Save-Url -Url $sumsUrl -Destination $sumsPath
+    }
+    catch {
+        throw "release $Version has no SHA256SUMS at $sumsUrl, so the download cannot be verified.`n  Try a different version (`PMPX_VERSION=v0.3.0` works as of writing) or build from source:`n  cargo install pmpx --locked"
+    }
 
     $expected = Get-ExpectedHash -SumsPath $sumsPath -FileName $Archive
-    if (-not $expected) { throw "SHA256SUMS does not list $Archive" }
+    if (-not $expected) { throw "SHA256SUMS does not list $Archive (the release is for other platforms)" }
+
+    # 2. The archive, then its hash. A mismatch stops here: nothing has been written yet.
+    $archiveUrl = "$Base/$Version/$Archive"
+    Write-Host "Downloading $archiveUrl"
+    $archivePath = Join-Path $tmp $Archive
+    Save-Url -Url $archiveUrl -Destination $archivePath
 
     $actual = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLower()
     if ($expected.ToLower() -ne $actual) {

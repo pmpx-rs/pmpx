@@ -72,11 +72,17 @@ target() {
 # Talking to the release page
 # ---------------------------------------------------------------------------
 
+# Downloads `url` into `dest` and returns non-zero on failure. The caller decides what the
+# failure means -- a missing archive is a different problem from a missing SHA256SUMS, and
+# pinning the message at the call site is what lets a missing checksum file be named
+# instead of appearing as a generic "the download failed".
 download() { # <url> <destination>
+  url=$1
+  dest=$2
   if have curl; then
-    curl -fsSL -o "$2" "$1"
+    curl -fsSL -o "$dest" "$url"
   elif have wget; then
-    wget -qO "$2" "$1"
+    wget -qO "$dest" "$url"
   else
     die "neither curl nor wget is installed"
   fi
@@ -146,12 +152,24 @@ main() {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT INT TERM
 
-  note "Downloading $base/$version/$archive"
-  download "$base/$version/$archive" "$tmp/$archive"
-  download "$base/$version/SHA256SUMS" "$tmp/SHA256SUMS"
+  # 1. SHA256SUMS first: the archive is verified against it, and without it there is nothing
+  #    to verify against. A missing SHA256SUMS means the release is incomplete -- the
+  #    archive may well be there, but this script must not install unverified bytes.
+  note "Downloading $base/$version/SHA256SUMS"
+  if ! download "$base/$version/SHA256SUMS" "$tmp/SHA256SUMS"; then
+    die "release $version has no SHA256SUMS at $base/$version/SHA256SUMS, so the download cannot be verified.
+  Try a different version (PMPX_VERSION=v0.3.0 works as of writing) or build from source:
+    cargo install pmpx --locked"
+  fi
 
   expected=$(expected_hash "$tmp/SHA256SUMS" "$archive")
-  [ -n "$expected" ] || die "SHA256SUMS does not list $archive"
+  [ -n "$expected" ] || die "SHA256SUMS does not list $archive (the release is for other platforms)"
+
+  # 2. The archive, then its hash. A mismatch stops here: nothing has been written yet.
+  note "Downloading $base/$version/$archive"
+  if ! download "$base/$version/$archive" "$tmp/$archive"; then
+    die "cannot download $base/$version/$archive (the release has SHA256SUMS but no archive for this platform)"
+  fi
 
   actual=$(sha256_of "$tmp/$archive")
   if [ "$expected" != "$actual" ]; then
