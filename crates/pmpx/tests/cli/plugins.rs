@@ -1,7 +1,9 @@
 //! The plugin subcommands: listing, pinning, and the bad cases of plugin manifests and of
 //! choosing a plugin by hand.
 
-use crate::support::{sandbox_with_plugin, stderr_of, Sandbox};
+use std::process::Command;
+
+use crate::support::{sandbox_with_plugin, stderr_of, Sandbox, PMPX};
 
 #[test]
 fn plugin_ls_says_how_to_start() {
@@ -31,6 +33,43 @@ fn plugin_set_writes_a_pmpx_toml_and_it_takes_effect() {
     // Once it takes effect, a bare run should still select it
     let out = sb.ok(&[]);
     assert!(out.contains("fakepm"), "{out}");
+}
+
+/// With several `.pmpx.toml` on the way up, `plugin set` writes the **nearest** one -- the layer
+/// the user chose. It asks the session for the list it already collected instead of walking the
+/// directories again, so this pins that the two agree.
+#[test]
+fn plugin_set_writes_the_nearest_existing_config() {
+    let (_build, sb, _lib) = sandbox_with_plugin();
+
+    // One layer above the project root, and one inside it.
+    std::fs::write(sb.project.join(".pmpx.toml"), "[plugin]\n").unwrap();
+    let inner = sb.project.join("pkg");
+    std::fs::create_dir_all(&inner).unwrap();
+    std::fs::write(inner.join(".pmpx.toml"), "[plugin]\n").unwrap();
+    sb.file("pkg/fakepm.lock");
+
+    let out = Command::new(PMPX)
+        .args(["plugin", "set", "fakepm"])
+        .current_dir(&inner)
+        .env("PMPX_CONFIG_DIR", &sb.config_dir)
+        .env("PMPX_DATA_DIR", &sb.data_dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr_of(&out));
+
+    let nearer = std::fs::read_to_string(inner.join(".pmpx.toml")).unwrap();
+    assert!(
+        nearer.contains("faketest"),
+        "the nearer layer should have been written: {nearer}"
+    );
+
+    let upper = std::fs::read_to_string(sb.project.join(".pmpx.toml")).unwrap();
+    assert_eq!(
+        upper.trim(),
+        "[plugin]",
+        "the layer above must be left alone: {upper}"
+    );
 }
 
 #[test]

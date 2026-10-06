@@ -128,13 +128,13 @@ pub(super) fn plugin_unset(
 ///
 /// The nearest layer wins: an existing file is the layer the user chose; when there is none,
 /// write at the project root.
+///
+/// `Session::open` already collected exactly that list -- `project.sources` holds every
+/// `.pmpx.toml` the walk found, nearest first -- so this asks it instead of walking the same
+/// directories a second time.
 fn target_config_path(session: &Session) -> PathBuf {
-    // `walk.dirs` goes from nearest to farthest
-    for dir in &session.walk.dirs {
-        let p = dir.join(".pmpx.toml");
-        if p.is_file() {
-            return p;
-        }
+    if let Some(nearest) = session.project.sources.first() {
+        return nearest.clone();
     }
 
     let base = session
