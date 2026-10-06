@@ -208,7 +208,7 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
                     anstream::println!(
                         "  {} {}",
                         style::label(15, "reported name"),
-                        style::paint(style::PM, &backend.name)
+                        style::paint(style::PM, backend.name())
                     );
                     anstream::println!(
                         "  {} {}",

@@ -66,8 +66,10 @@ pub fn run(spec: &CommandSpec, cwd: &Path) -> Result<u8> {
         }
         // A note the host did not anticipate (the exit code did not fit in 8 bits, a signal, …). It is
         // shown, not swallowed: a silently changed exit code is exactly what a script would trip over.
-        Event::Note(text) => note_line(text),
+        Event::Warning(text) => note_line(text),
         Event::Error(text) => error_line(text),
+        // Nothing else can arrive here: this crate runs a command, and a plugin is not involved.
+        Event::Note(_) | Event::PluginMessage { .. } => {}
     };
 
     match pmpx_engine::run(&plan, cwd, &mut render) {

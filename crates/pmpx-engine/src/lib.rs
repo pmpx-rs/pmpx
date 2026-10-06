@@ -27,13 +27,19 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+mod backend;
 mod command;
 mod error;
+mod files;
+mod log;
 mod not_found;
 mod resolve;
 
+pub use backend::{Backend, Call, PluginIdentity};
 pub use command::command_for;
 pub use error::EngineError;
+pub use files::{Declared, MAX_FILES, MAX_FILE_BYTES};
+pub use log::Levels;
 pub use resolve::{resolve, ProgramKind, Resolved};
 
 use crate::resolve::resolve as resolve_program;
@@ -131,11 +137,25 @@ pub enum Event {
         code: u8,
     },
 
-    /// Something the person should know, but which did not stop anything.
+    /// Something the person should know even without asking for detail.
+    Warning(String),
+
+    /// Detail for someone tracing the run.
     Note(String),
 
     /// Something went wrong, which did not stop the run either.
     Error(String),
+
+    /// The plugin said something while it was being called.
+    ///
+    /// The level is the contract's number, and the text is exactly what the plugin wrote: how to show
+    /// it (an id, a colour, a destination) is the caller's business.
+    PluginMessage {
+        /// The contract's level number.
+        level: u32,
+        /// The message itself.
+        text: String,
+    },
 }
 
 /// Really run it: inherit stdio, wait for it to finish, hand back its exit code verbatim.
@@ -186,7 +206,7 @@ fn exit_code_of(status: std::process::ExitStatus, events: &mut dyn FnMut(Event))
         // On Windows an exit code can be any u32 -- `code()` reinterprets those bits as `i32`, so it is
         // reported back as unsigned, or `exit /b -1` would read as "-1" instead of 4294967295. Take the
         // low 8 bits instead of erroring: the user's script cares about "nonzero", not the value.
-        events(Event::Note(format!(
+        events(Event::Warning(format!(
             "the backend exited with {}, which does not fit in 8 bits; passing through the low 8 bits \
              ({})",
             code as u32,

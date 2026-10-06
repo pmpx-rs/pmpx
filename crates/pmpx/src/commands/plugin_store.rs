@@ -8,7 +8,6 @@ use pmpx_plugin::Family;
 use crate::app::Session;
 use crate::cli::Cli;
 use crate::error::{PmpxError, EXIT_OK};
-use crate::runtime::Backend;
 use crate::style;
 
 /// `plugin add`
@@ -196,13 +195,13 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
 
         // The plugin record we already have is enough to load it -- no need to dress it up as a
         // detection result.
-        if let Ok(backend) = Backend::load(p, session.host_hooks()) {
+        if let Ok(backend) = session.load_plugin(p) {
             let (rustc_version, target) = backend.build_info();
             anstream::println!("Plugin reports");
             anstream::println!(
                 "  {} {}",
                 style::label(15, "name"),
-                style::paint(style::PM, &backend.name)
+                style::paint(style::PM, backend.name())
             );
             anstream::println!("  {} {}", style::label(15, "family"), backend.family());
             anstream::println!(

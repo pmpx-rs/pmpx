@@ -18,8 +18,9 @@ use crate::debug;
 use crate::detect::{self, DetectFailure, FamilyScore, Selection};
 use crate::discovery::{self, StopReason, Walk};
 use crate::error::PmpxError;
+use crate::plugins::InstalledPlugin;
 use crate::plugins::PluginSet;
-use crate::runtime::Backend;
+use crate::runtime::{Backend, Levels, PluginIdentity};
 use crate::style;
 
 mod flow;
@@ -209,13 +210,15 @@ impl Session {
         PmpxError::not_found(msg)
     }
 
-    /// What a plugin's logging reaches for this run.
+    /// How much of a plugin's own output this run wants.
     ///
-    /// The level is decided once, here: `--quiet` asks for the least, `--debug` for the most, and a
-    /// plain run sits between them so that a plugin's warnings still get through while its notes
-    /// do not.
-    pub fn host_hooks(&self) -> &'static pmpx_plugin::abi::PmpxHost {
-        crate::runtime::hooks(self.quiet, debug::enabled())
+    /// Decided once, here: `--quiet` asks for the least, `--debug` for the most, and a plain run sits
+    /// between them so that a plugin's warnings still get through while its notes do not.
+    pub fn levels(&self) -> Levels {
+        Levels {
+            quiet: self.quiet,
+            trace: debug::enabled(),
+        }
     }
 
     /// Resolve which plugin to use.
@@ -281,8 +284,35 @@ impl Session {
             )));
         };
 
+        self.load_plugin(plugin)
+    }
+
+    /// Load one installed plugin, whatever the reason: a verb, `plugin info`, or the store listing its
+    /// diagnostics.
+    ///
+    /// The store knows how a plugin's directory is laid out, so finding the library is this side's job;
+    /// everything past that -- opening it, checking what it says about itself, installing the hooks -- is
+    /// the engine's.
+    pub fn load_plugin(&self, plugin: &InstalledPlugin) -> crate::error::Result<Backend> {
         let t = debug::now();
-        let backend = Backend::load(plugin, self.host_hooks());
+
+        let identity = PluginIdentity {
+            name: plugin.name.clone(),
+            crate_name: plugin.crate_name.clone(),
+            dir: plugin.dir.clone(),
+            wanted: plugin.wanted.clone(),
+            declared_abi: plugin.abi,
+        };
+
+        let backend = library_for(plugin).and_then(|library| {
+            let name = plugin.name.clone();
+            let mut sink = |event| {
+                crate::runtime::render(&name, event);
+            };
+            Backend::load(&identity, &library, self.levels(), &mut sink)
+                .map_err(|error| backend_error(error.message()))
+        });
+
         debug::done("backend.load", t, || match &backend {
             Ok(_) => plugin.crate_name.clone(),
             Err(e) => format!("{} FAILED: {e}", plugin.crate_name),
@@ -290,6 +320,27 @@ impl Session {
 
         backend
     }
+}
+
+/// The library file of an installed plugin.
+///
+/// The store names it after the crate, with the platform's conventions: `pmpx-plugin-pnpm` becomes
+/// `pmpx_plugin_pnpm.dll` / `.so` / `.dylib`, and `find_library` knows the last part of that.
+fn library_for(plugin: &InstalledPlugin) -> crate::error::Result<std::path::PathBuf> {
+    let stem = plugin.crate_name.replace('-', "_");
+    crate_plugin_kit::find_library(&plugin.dir, &stem).map_err(|e| {
+        backend_error(format!(
+            "cannot find the plugin library for {} in {}: {e}",
+            plugin.crate_name,
+            plugin.dir.display()
+        ))
+    })
+}
+
+/// A failure that means "this plugin cannot be used": exit code 3, the code a script reads as "your
+/// setup is incomplete".
+fn backend_error(message: String) -> PmpxError {
+    PmpxError::not_found(message)
 }
 
 /// Compute the start directory.

@@ -314,7 +314,7 @@ impl Engine {
 | 2 | `pmpx-plugin-abi` + `pmpx-plugin` v3：键、能力、C 头 | 一个 fixture 插件能用新外壳构建并加载；能力/键协商测试（缺必需能力、函数表过短、未知键、空数组、panic）全绿；C 头重新生成后逐字节一致 |
 | 3 | `pmpx-loader`：宿主侧 ABI，全部 | 现有的 shim 测试迁移到 loader；宿主侧 crate 里的 `unsafe` 数量为零 |
 | 4 | `pmpx-project` + `pmpx-detect`：纯决策 | 检测测试在**没有文件系统**的情况下运行（证据是数据）；今天的排序/pin/同分测试原样迁移；`pmpx-detect` 零依赖 —— **两步都已完成** |
-| 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出）—— **执行与事件已落地**，设置/商店/门面待做 |
+| 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出）—— **执行、事件、"跟插件说话"的全部机制已落地**，设置/商店/门面待做 |
 | 6 | `pmpx` CLI：薄外壳、`--explain`、`--json`、别名展开 | 端到端测试跑真实二进制；所有人类可见输出都在这个 crate；库依赖守卫通过 |
 | 7 | `pmpx-testkit` + `pmpx plugin new/test` | 插件能对着 fixture 目录、也能对着内存文件表，用真实检测完成测试，代码一屏写得下 |
 
@@ -336,7 +336,7 @@ impl Engine {
 
 | 守卫 | 检查方式 |
 | --- | --- |
-| 不安全孤岛 | `unsafe` 只出现在 `pmpx-plugin-abi`、`pmpx-loader`、`pmpx-plugin` 的 `shell` / `export` / `debug` / `context`（类型化上下文是外壳的另一半，它负责读访问器），以及宿主侧唯一的一处 `runtime/backend.rs`（一次加载调用）与 `runtime/log.rs`（宿主自己导出的两个 C 回调）。CI 用一条 grep 守着（只看真正的代码行，注释里的"unsafe"不算）：其余任何地方出现 `unsafe` 都失败 |
+| 不安全孤岛 | `unsafe` 只出现在 `pmpx-plugin-abi`、`pmpx-loader`、`pmpx-plugin` 的 `shell` / `export` / `debug` / `context`（类型化上下文是外壳的另一半，它负责读访问器），以及 `pmpx-engine` 的 `backend.rs`（一次加载调用）与 `log.rs`（宿主自己导出的两个 C 回调）。CI 用一条 grep 守着（只看真正的代码行，注释里的"unsafe"不算）：其余任何地方出现 `unsafe` 都失败 |
 | 库不打印 | `pmpx-project`、`pmpx-detect`、`pmpx-engine`、`pmpx-plugin`、`pmpx-plugin-abi` 的**直接**依赖里没有 `anstream`、`anstyle`、`clap`、`ureq`、`serde_json`、`tar`、`zip`、`flate2` |
 | 无商店的引擎依旧干净 | 关掉 `store` 特性时，`pmpx-engine` 的依赖树里没有 `crate-plugin-kit` / `ureq` |
 | ABI crate 零依赖 | `pmpx-plugin-abi` 的依赖列表为空 |

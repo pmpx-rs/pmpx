@@ -456,6 +456,8 @@ version = "0.2.1"
 name = "pmpx-engine"
 version = "0.2.1"
 dependencies = [
+ "pmpx-loader",
+ "pmpx-plugin",
  "tempfile",
  "which",
 ]

@@ -110,7 +110,7 @@ jobs:
           set -euo pipefail
           # Only real code counts: a line whose `unsafe` sits behind a `//` is prose (several module
           # docs here explain what `unsafe` is for).
-          allowed='^(crates/pmpx-plugin-abi/|crates/pmpx-loader/|crates/pmpx-plugin/src/(shell|export|debug|context)[.]rs|crates/pmpx/src/runtime/(backend|log)[.]rs)'
+          allowed='^(crates/pmpx-plugin-abi/|crates/pmpx-loader/|crates/pmpx-plugin/src/(shell|export|debug|context)[.]rs|crates/pmpx-engine/src/(backend|log)[.]rs)'
           offenders=$(grep -rl --include='*.rs' -E '^[^/]*\bunsafe\b' crates \
             | grep -Ev "$allowed" \
             | grep -Ev '(/fixtures/|/tests/|tests[.]rs$)' || true)
@@ -119,7 +119,7 @@ jobs:
             echo "$offenders"
             exit 1
           fi
-          echo "unsafe appears only in the ABI layer, the plugin shell (including the typed context), and the host's two ABI files"
+          echo "unsafe appears only in the ABI layer, the plugin shell (including the typed context), and the engine's two ABI files"
 
       # "Zero async runtime in the whole stack" is a promise written down in the README.
       # Without this gate it is just a sentence -- if some dependency casually drags tokio

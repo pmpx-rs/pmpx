@@ -14,12 +14,17 @@ categories = ["development-tools"]
 [dependencies]
 which = "8"
 
+# The contract (verbs, reasons, `CommandSpec`) and the host side of the ABI (negotiation, calling, the
+# typed context). This is the crate that talks to plugins, so it is the crate that names them.
+pmpx-plugin.workspace = true
+pmpx-loader.workspace = true
+
 [dev-dependencies]
 tempfile = "3"
 
 [lints.rust]
 missing_docs = "deny"
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"

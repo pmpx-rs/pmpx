@@ -9,7 +9,7 @@ use pmpx_plugin::{CommandSpec, Verb};
 use super::Session;
 use crate::debug;
 use crate::error::{PmpxError, Result};
-use crate::runtime::Invocation;
+use crate::runtime::Call;
 use crate::spawn;
 
 /// Run one of the project's own named commands, if it defines one.
@@ -94,7 +94,8 @@ pub fn run_verb(
     // allowlist, and nothing on the filesystem is touched on its behalf.
     let files = crate::runtime::Declared::new(&root, backend.wanted_files());
 
-    let invocation = Invocation {
+    let call = Call {
+        verb,
         root: &root,
         start_dir: &session.start_dir,
         matched: &selection.matched,
@@ -105,7 +106,13 @@ pub fn run_verb(
         args,
         files: &files,
     };
-    let answer = backend.command(&invocation, verb);
+    // The plugin's own lines and whatever the file provider had to say are rendered as they arrive; the
+    // verb is part of the call, not a separate argument.
+    let name = selection.name.clone();
+    let mut sink = |event| {
+        crate::runtime::render(&name, event);
+    };
+    let answer = backend.command(&call, &mut sink);
     // Pure mapping on the other side of the ABI: no file is read and no process is started
     // here, so this is the cost of the call itself, not of what it decides.
     debug::done("plugin.command", t, || verb.to_string());
