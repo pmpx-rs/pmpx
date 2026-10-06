@@ -20,13 +20,16 @@ pub struct ProjectConfig {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin: BTreeMap<String, String>,
 
-    /// `[scripts] name = "run something"`: the semantics are not defined yet; it is only parsed and
-    /// kept verbatim — the read-modify-write of `plugin set/unset` must not eat it.
+    /// `[scripts] name = "run something"` (or `name = ["run", "something"]`): a named command the
+    /// project defines for itself.
+    ///
+    /// This is a **convenience for the person, not an input to a plugin**: `pmpx run <name>` looks the
+    /// name up here first and runs it directly if it is there. It never crosses the plugin boundary.
     ///
     /// Empty tables are not written back, so pinning something does not add a `[scripts]` line to a
     /// file that never had one.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub scripts: BTreeMap<String, String>,
+    pub scripts: BTreeMap<String, Script>,
 
     /// Unrecognized keys are kept as they are; same reason as [`GlobalConfig::extra`].
     ///
@@ -63,6 +66,89 @@ impl ProjectConfig {
     }
 }
 
+/// One `[scripts]` entry, in either shape TOML allows.
+///
+/// ```toml
+/// [scripts]
+/// build = "cargo build --release"
+/// test  = ["cargo", "test", "--all"]
+/// ```
+///
+/// An array is already arguments and is taken as written. A string is a command line the way a person
+/// writes one, and [`Script::tokens`] splits it: quotes group, and nothing else is special. No shell
+/// is involved, so `$VAR`, `&&` and a pipe are ordinary characters -- which is the only behaviour that
+/// can be the same on all three platforms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Script {
+    /// A command line, to be split into arguments.
+    Line(String),
+    /// The arguments themselves, one per element.
+    Args(Vec<String>),
+}
+
+impl Script {
+    /// The arguments to run: an array as-is, a string split into words.
+    ///
+    /// The splitting rules, in full:
+    ///
+    /// - Runs of whitespace separate arguments.
+    /// - `"..."` and `'...'` group: everything between the quotes is one argument, whitespace
+    ///   included, and the quotes are not part of it.
+    /// - An unclosed quote takes the rest of the line, so a typo still runs something explainable
+    ///   rather than failing on a rule nobody remembers.
+    /// - No escapes, no substitution, no globbing: what is written is what is passed.
+    pub fn tokens(&self) -> Vec<String> {
+        match self {
+            Script::Args(args) => args.clone(),
+            Script::Line(line) => split(line),
+        }
+    }
+}
+
+/// Split one command line, as described on [`Script::tokens`].
+fn split(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quoted: Option<char> = None;
+    let mut started = false;
+
+    for c in line.chars() {
+        match quoted {
+            // Inside quotes everything is literal, including whitespace.
+            Some(quote) => {
+                if c == quote {
+                    quoted = None;
+                } else {
+                    current.push(c);
+                }
+            }
+            None => match c {
+                '"' | '\'' => {
+                    quoted = Some(c);
+                    // `""` is an empty argument, and it has to survive as one.
+                    started = true;
+                }
+                c if c.is_whitespace() => {
+                    if started {
+                        tokens.push(std::mem::take(&mut current));
+                        started = false;
+                    }
+                }
+                c => {
+                    current.push(c);
+                    started = true;
+                }
+            },
+        }
+    }
+
+    if started {
+        tokens.push(current);
+    }
+    tokens
+}
+
 /// The merge result of every `.pmpx.toml` collected from near to far.
 #[derive(Debug, Clone, Default)]
 pub struct MergedProjectConfig {
@@ -71,7 +157,7 @@ pub struct MergedProjectConfig {
     /// Effective `[scripts]`. No reader yet, but it cannot be dropped: without it no future reader
     /// would see user-written scripts.
     #[allow(dead_code)]
-    pub scripts: BTreeMap<String, String>,
+    pub scripts: BTreeMap<String, Script>,
     /// The files actually read, **near to far** (`pmpx info` uses them to say which configs a value
     /// came from).
     pub sources: Vec<PathBuf>,

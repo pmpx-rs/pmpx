@@ -17,6 +17,7 @@
 mod config;
 mod detection;
 mod plugins;
+mod scripts;
 mod self_update;
 mod support;
 mod surface;

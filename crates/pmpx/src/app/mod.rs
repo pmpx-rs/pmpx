@@ -24,7 +24,7 @@ use crate::style;
 
 mod flow;
 
-pub use flow::run_verb;
+pub use flow::{run_script, run_verb};
 
 /// The whole context of one run. One run reads the config once.
 ///

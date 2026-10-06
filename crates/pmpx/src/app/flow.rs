@@ -4,13 +4,45 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use pmpx_plugin::Verb;
+use pmpx_plugin::{CommandSpec, Verb};
 
 use super::Session;
 use crate::debug;
 use crate::error::{PmpxError, Result};
 use crate::runtime::Invocation;
 use crate::spawn;
+
+/// Run one of the project's own named commands, if it defines one.
+///
+/// `[scripts]` is a convenience for the person: `pmpx run <name>` looks the name up here first and runs
+/// it directly, so a project does not need a plugin at all to have a `pmpx fmt`. `None` means "no such
+/// name", and the caller routes it to a plugin instead.
+///
+/// The command runs in the project root when there is one, and in the start directory otherwise -- the
+/// same answer as everything else that spawns, without needing detection to have run.
+pub fn run_script(session: &Session, name: &str, extra: &[OsString]) -> Option<Result<u8>> {
+    let script = session.project.scripts.get(name)?;
+
+    let mut tokens = script.tokens();
+    if tokens.is_empty() {
+        return Some(Err(PmpxError::Usage(format!(
+            "the [scripts] entry \"{name}\" is empty, so there is nothing to run"
+        ))));
+    }
+
+    let program = OsString::from(tokens.remove(0));
+    let spec = CommandSpec::new(program).args(tokens).args(extra.iter());
+
+    let cwd = session
+        .project_root()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| session.start_dir.clone());
+
+    // Nothing is asked of a plugin, so this is the whole path: print what will run, then run it and
+    // pass the exit code through.
+    announce(session.quiet, &spec);
+    Some(spawn::run(&spec, &cwd))
+}
 
 /// Run one verb all the way: resolve -> load -> ask the plugin -> spawn -> pass the exit
 /// code through.

@@ -57,11 +57,22 @@ pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
         }
 
         Command::Run { target, args: rest } => {
-            // `pmpx run <target> -- <args>`: the target and what follows `--` go to the
-            // plugin together; how to arrange them is up to the plugin (cargo, for example,
-            // uses `cargo run -- ...`).
+            let session = Session::open(args).map_err(PmpxError::Other)?;
+
+            // A name the project defines for itself is answered before any plugin is involved: it is a
+            // convenience for the person, not something a plugin is asked to translate. Anything the
+            // user typed after the name is appended to it, which is what makes `pmpx run fmt -- --check`
+            // work without a second mechanism.
+            if let Some(name) = target.as_deref().map(|t| t.to_string_lossy().into_owned()) {
+                if let Some(result) = app::run_script(&session, &name, rest) {
+                    return result;
+                }
+            }
+
+            // Otherwise the target and what follows `--` go to the plugin together; how to arrange them
+            // is up to the plugin (cargo, for example, uses `cargo run -- ...`).
             let argv: Vec<OsString> = target.iter().cloned().chain(rest.iter().cloned()).collect();
-            run_verb(args, pmpx_plugin::Verb::Run, argv, false)
+            app::run_verb(&session, pmpx_plugin::Verb::Run, &argv, false)
         }
 
         // `exec` is the only verb allowed to degrade

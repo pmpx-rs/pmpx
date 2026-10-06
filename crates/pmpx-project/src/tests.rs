@@ -144,10 +144,70 @@ fn scripts_merge_across_layers() {
     let near = write(tmp.path(), "near.toml", "[scripts]\nfmt = \"run f\"\n");
 
     let merged = MergedProjectConfig::from_paths_near_to_far(&[near, far]).unwrap();
-    assert_eq!(merged.scripts.get("fmt").map(String::as_str), Some("run f"));
     assert_eq!(
-        merged.scripts.get("lint").map(String::as_str),
-        Some("run lint")
+        merged.scripts.get("fmt"),
+        Some(&Script::Line("run f".to_string())),
+        "the nearer layer wins"
+    );
+    assert_eq!(
+        merged.scripts.get("lint"),
+        Some(&Script::Line("run lint".to_string())),
+        "a key only the farther layer has survives"
+    );
+}
+
+/// A named command may be written as a line or as arguments, and both are taken as written.
+#[test]
+fn a_script_is_either_a_line_or_arguments() {
+    // A line is split into words, with quotes grouping and nothing else special.
+    assert_eq!(
+        Script::Line("cargo build --release".to_string()).tokens(),
+        vec!["cargo", "build", "--release"]
+    );
+    assert_eq!(
+        Script::Line("echo \"a b\"  'c d'".to_string()).tokens(),
+        vec!["echo", "a b", "c d"],
+        "quotes group, and are not part of the argument"
+    );
+    assert_eq!(
+        Script::Line("  add   left-pad  ".to_string()).tokens(),
+        vec!["add", "left-pad"],
+        "runs of whitespace are one separator"
+    );
+    assert_eq!(
+        Script::Line("echo \"unclosed".to_string()).tokens(),
+        vec!["echo", "unclosed"],
+        "a typo still runs something explainable"
+    );
+    assert!(
+        Script::Line("echo $HOME && ls | wc".to_string())
+            .tokens()
+            .contains(&"$HOME".to_string()),
+        "there is no shell, so these are ordinary characters"
+    );
+
+    // An array is already arguments.
+    assert_eq!(
+        Script::Args(vec!["cargo".to_string(), "test".to_string()]).tokens(),
+        vec!["cargo", "test"]
+    );
+}
+
+/// The array shape has to survive the file round trip, which is what makes it usable in a real
+/// `.pmpx.toml`.
+#[test]
+fn both_shapes_parse_from_toml() {
+    let parsed: ProjectConfig =
+        toml::from_str("[scripts]\nbuild = \"cargo build\"\ntest = [\"cargo\", \"test\"]\n")
+            .unwrap();
+
+    assert_eq!(
+        parsed.scripts["build"],
+        Script::Line("cargo build".to_string())
+    );
+    assert_eq!(
+        parsed.scripts["test"],
+        Script::Args(vec!["cargo".to_string(), "test".to_string()])
     );
 }
 
@@ -220,6 +280,12 @@ fn the_merged_pins_are_the_map_the_decision_reads() {
 /// It mutates process-level environment variables: set inside one test only, original values
 /// saved, restored before asserting, and only the `PMPX_`-prefixed variables read by this module
 /// are touched.
+///
+/// The `allow` is the crate's one exception to "no `unsafe`": since edition 2024, changing the
+/// process environment is `unsafe` because another thread may be reading it, and there is no safe way
+/// to test an environment override. It is scoped to this test, and the CI guard that keeps `unsafe`
+/// inside the ABI islands skips test files by design.
+#[allow(unsafe_code)]
 #[test]
 fn env_overrides_take_effect() {
     let tmp = tempfile::tempdir().unwrap();

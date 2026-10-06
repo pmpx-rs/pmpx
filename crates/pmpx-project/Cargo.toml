@@ -1,0 +1,29 @@
+[package]
+name = "pmpx-project"
+description = "Reads, merges and writes pmpx's own configuration files."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["cli", "pmpx", "configuration"]
+categories = ["development-tools"]
+
+# Configuration is a file format, so a parser and a serializer are the whole dependency list. Nothing
+# here prints: every outcome is a value, and the caller decides what to say.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+anyhow = "1"
+# Where the files live on each platform. `~/.config` is neither the macOS nor the Windows answer.
+directories = "6"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"

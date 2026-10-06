@@ -434,6 +434,7 @@ dependencies = [
  "pmpx-detect",
  "pmpx-loader",
  "pmpx-plugin",
+ "pmpx-project",
  "ring",
  "serde",
  "serde_json",
@@ -471,6 +472,17 @@ dependencies = [
 [[package]]
 name = "pmpx-plugin-abi"
 version = "0.2.1"
+
+[[package]]
+name = "pmpx-project"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "directories",
+ "serde",
+ "tempfile",
+ "toml",
+]
 
 [[package]]
 name = "proc-macro2"

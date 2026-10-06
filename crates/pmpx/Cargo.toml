@@ -26,6 +26,9 @@ pmpx-loader.workspace = true
 # The decision: which plugin a project belongs to, computed from data.
 pmpx-detect.workspace = true
 
+# pmpx's own configuration files (.pmpx.toml layers, the global file, atomic writes).
+pmpx-project.workspace = true
+
 # General plugin management library: install / load / cross-process lock / cache. An
 # external dependency, consumed by version.
 crate-plugin-kit.workspace = true

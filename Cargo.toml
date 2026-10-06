@@ -29,6 +29,9 @@ pmpx-loader = { path = "crates/pmpx-loader", version = "0.2.1" }
 # The decision: scoring and resolution, on data. Zero dependencies, no filesystem, no printing.
 pmpx-detect = { path = "crates/pmpx-detect", version = "0.2.1" }
 
+# pmpx's own configuration files: reading, layering, writing.
+pmpx-project = { path = "crates/pmpx-project", version = "0.2.1" }
+
 # General plugin management library. An external dependency, consumed by version, not by path.
 crate-plugin-kit = "0.2.0"
 
