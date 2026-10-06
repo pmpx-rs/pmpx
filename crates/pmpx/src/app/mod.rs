@@ -154,3 +154,168 @@ pub fn run_script(
     pmpx_engine::run_script(session, name, extra, &mut |event| sink.handle(event))
         .map(|result| result.map_err(PmpxError::from))
 }
+
+/// `--explain`: what the decision was based on, and nothing run.
+///
+/// The interesting part of pmpx is invisible: which markers an installed plugin declares, which one
+/// cannot take part and why, what each family scored, and what the decision did with all of that. This
+/// prints it. With `--json` the same thing goes out as one object, because a program reads it too.
+pub fn explain(args: &Cli) -> crate::error::Result<u8> {
+    // The setup phases are a separate concern: unless `--debug` asked for them, they stay out of the
+    // report, so `--explain --json` is exactly one object.
+    let trace = debug::enabled();
+    let mut sink = Sink::new();
+    let session = Session::open(options(args), &mut |event| {
+        if trace {
+            sink.handle(event);
+        }
+    })
+    .map_err(PmpxError::from)?;
+
+    let root = session
+        .project_root()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| session.start_dir.clone());
+    // The engine is asked directly, with the same "only when tracing" rule as the setup above: the report
+    // is the output, and a phase line is not part of it.
+    let families =
+        pmpx_engine::detect::score_all(&session.plugins, &root, &session.project, &mut |event| {
+            if trace {
+                sink.handle(event);
+            }
+        });
+
+    // A refusal is a result here, not an error: "why is nothing selected" is the question this command
+    // exists to answer.
+    let outcome = session.project_root().map(|_| {
+        session
+            .select_from(&root, &families, &mut |event| {
+                if trace {
+                    sink.handle(event);
+                }
+            })
+            .map_err(|failure| PmpxError::from(pmpx_engine::EngineError::Detect(failure)))
+    });
+
+    if crate::runtime::is_json() {
+        let installed: Vec<serde_json::Value> = session
+            .plugins
+            .plugins
+            .iter()
+            .map(|plugin| {
+                serde_json::json!({
+                    "name": plugin.name(),
+                    "crate_name": plugin.crate_name(),
+                    "version": plugin.version(),
+                    "family": plugin.family.as_ref().map(|f| f.as_str().to_string()),
+                    "abi": plugin.abi(),
+                    "problem": plugin.problem(),
+                    "markers": plugin.detect_names().collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let scores: Vec<serde_json::Value> = families
+            .values()
+            .map(|family| {
+                serde_json::json!({
+                    "family": family.family,
+                    "score": family.score,
+                    "pinned": family.pinned,
+                    "plugins": family.plugins.len(),
+                })
+            })
+            .collect();
+        let chosen = match &outcome {
+            Some(Ok(selection)) => serde_json::json!({
+                "plugin": selection.name,
+                "crate_name": selection.crate_name,
+                "family": selection.family,
+                "score": selection.score,
+                "reason": format!("{:?}", selection.reason),
+            }),
+            Some(Err(error)) => serde_json::json!({ "refused": error.to_string() }),
+            None => serde_json::Value::Null,
+        };
+
+        anstream::println!(
+            "{}",
+            serde_json::json!({
+                "start_dir": session.start_dir.to_string_lossy(),
+                "project_root": session.project_root().map(|p| p.to_string_lossy().into_owned()),
+                "walked": session.walk.dirs.len(),
+                "installed": installed,
+                "scores": scores,
+                "chosen": chosen,
+            })
+        );
+
+        return Ok(crate::error::EXIT_OK);
+    }
+
+    anstream::println!(
+        "{}",
+        crate::style::paint(crate::style::DIM, "explain: nothing was run")
+    );
+    anstream::println!("{:<18}{}", "start directory", session.start_dir.display());
+    anstream::println!(
+        "{:<18}{}",
+        "project root",
+        session
+            .project_root()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".to_string())
+    );
+    anstream::println!("{:<18}{} directories", "walk-up", session.walk.dirs.len());
+
+    anstream::println!("\ninstalled");
+    if session.plugins.plugins.is_empty() {
+        anstream::println!("  (none)");
+    }
+    for plugin in &session.plugins.plugins {
+        anstream::println!(
+            "  {} {} family={} abi={}{}",
+            plugin.name(),
+            crate::style::paint(crate::style::DIM, format!("v{}", plugin.version())),
+            plugin.family.as_ref().map(|f| f.as_str()).unwrap_or("-"),
+            plugin
+                .abi()
+                .map(|abi| abi.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            match plugin.problem() {
+                Some(problem) => format!("  [{problem}]"),
+                None => String::new(),
+            }
+        );
+        let markers: Vec<&str> = plugin.detect_names().collect();
+        if !markers.is_empty() {
+            anstream::println!("      markers: {}", markers.join(", "));
+        }
+    }
+
+    anstream::println!("\nscores");
+    if families.is_empty() {
+        anstream::println!("  (nothing scored)");
+    }
+    for family in families.values() {
+        anstream::println!(
+            "  {:<12}{}{}",
+            family.family,
+            family.score,
+            if family.pinned { "  (pinned)" } else { "" }
+        );
+    }
+
+    match &outcome {
+        Some(Ok(selection)) => anstream::println!(
+            "\nchosen             {} ({}) score {} -- {:?}",
+            selection.name,
+            selection.family,
+            selection.score,
+            selection.reason
+        ),
+        Some(Err(error)) => anstream::println!("\nchosen             (none) {error}"),
+        None => anstream::println!("\nchosen             (none) no project root"),
+    }
+
+    Ok(crate::error::EXIT_OK)
+}

@@ -25,6 +25,10 @@ pub struct Cli {
     /// whose result is a table refuses the flag rather than mixing prose into the stream.
     #[arg(long = "json", global = true)]
     pub json: bool,
+
+    /// Report what the decision was based on -- markers, pins, scores, the winner -- and run nothing.
+    #[arg(long = "explain", global = true)]
+    pub explain: bool,
     /// Use this plugin for now, overriding `.pmpx.toml`
     ///
     /// A one-off override that is not written to disk. To pin it, use `pmpx plugin set`.

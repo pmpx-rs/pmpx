@@ -70,7 +70,7 @@ fn main() -> std::process::ExitCode {
 fn dispatch(args: &cli::Cli) -> u8 {
     // `--json` is a contract, so it is either honoured or refused: a command whose result is a human
     // table says so, rather than quietly mixing prose into the stream a caller is parsing.
-    if args.json
+    if (args.json || args.explain)
         && !matches!(
             args.command,
             // No subcommand at all is clap printing help, which is not a result a script asked for.
@@ -89,6 +89,17 @@ fn dispatch(args: &cli::Cli) -> u8 {
             "`--json` is not supported by this command yet".to_string(),
         ));
         return error::EXIT_USAGE;
+    }
+
+    // `--explain` is answered here, before anything is loaded or run: the report is the whole command.
+    if args.explain {
+        return match app::explain(args) {
+            Ok(code) => code,
+            Err(e) => {
+                error::error_line(&e);
+                e.exit_code()
+            }
+        };
     }
 
     match commands::dispatch(args) {
