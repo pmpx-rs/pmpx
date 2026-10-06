@@ -12,6 +12,55 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context as _};
 
 use super::release::binary_name;
+
+/// The largest the extracted binary may be.
+///
+/// A release archive is a couple of megabytes; the *download* limit says nothing about what comes
+/// out of a decompressor, so an archive cannot be allowed to decide how much lands in the install
+/// directory.
+const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Copy one archive member into a file this code creates, refusing anything absurdly large.
+///
+/// Both archive shapes go through here so that the limit, the flush and the error wording cannot
+/// drift apart. `declared` is what the archive claims; the copy itself is limited as well, because
+/// that claim is only the archive's word.
+fn write_member<R: std::io::Read>(
+    dest: &Path,
+    declared: u64,
+    reader: R,
+    limit: u64,
+) -> anyhow::Result<()> {
+    if declared > limit {
+        return Err(anyhow!(
+            "the archive's {} is {declared} bytes, which is too large to be the pmpx binary",
+            binary_name(std::env::consts::OS)
+        ));
+    }
+
+    let mut out =
+        fs::File::create(dest).with_context(|| format!("cannot write {}", dest.display()))?;
+
+    // The reader is taken by value and limited: the declared size is the archive's word, not a
+    // guarantee about how many bytes the decompressor will produce.
+    let mut limited = reader.take(limit + 1);
+    let copied = std::io::copy(&mut limited, &mut out).context("cannot read the archive entry")?;
+    if copied > limit {
+        drop(out);
+        let _ = fs::remove_file(dest);
+        return Err(anyhow!(
+            "the entry for {} is larger than the {limit} byte limit",
+            dest.display()
+        ));
+    }
+
+    // The rename that installs this file must not be able to publish a half-written one: without
+    // this, a crash can leave a truncated binary in place of a working pmpx.
+    out.sync_all()
+        .with_context(|| format!("cannot flush {}", dest.display()))?;
+
+    Ok(())
+}
 /// Extracts the binary out of a release archive into `dir`, returning its path.
 pub(super) fn extract(is_zip: bool, archive: &[u8], dir: &Path) -> anyhow::Result<PathBuf> {
     let member = binary_name(std::env::consts::OS);
@@ -68,9 +117,12 @@ pub(super) fn extract_from_tar_gz(
         }
 
         let dest = dir.join(member);
-        let mut out =
-            fs::File::create(&dest).with_context(|| format!("cannot write {}", dest.display()))?;
-        std::io::copy(&mut entry, &mut out).context("cannot read the archive entry")?;
+        write_member(
+            &dest,
+            entry.header().size().unwrap_or(0),
+            &mut entry,
+            MAX_EXTRACTED_BYTES,
+        )?;
         return Ok(dest);
     }
 
@@ -100,9 +152,7 @@ pub(super) fn extract_from_zip(
         }
 
         let dest = dir.join(member);
-        let mut out =
-            fs::File::create(&dest).with_context(|| format!("cannot write {}", dest.display()))?;
-        std::io::copy(&mut file, &mut out).context("cannot read the archive entry")?;
+        write_member(&dest, file.size(), &mut file, MAX_EXTRACTED_BYTES)?;
         return Ok(dest);
     }
 
@@ -258,5 +308,42 @@ mod tests {
             "{error}"
         );
         assert!(!tmp.path().join("pmpx.exe").is_file());
+    }
+
+    /// What the archive *claims* is checked first, before a byte is written.
+    #[test]
+    fn a_member_that_claims_to_be_enormous_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("pmpx");
+
+        let error = write_member(&dest, 100, &b"short"[..], 16).unwrap_err();
+
+        assert!(error.to_string().contains("too large"), "{error}");
+        assert!(!dest.exists(), "nothing should have been created");
+    }
+
+    /// And the claim is not trusted: a member that lies about its size still stops at the limit,
+    /// and the partial file is removed rather than left looking like an extracted binary.
+    #[test]
+    fn a_member_larger_than_it_claims_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("pmpx");
+        let ten_bytes = b"0123456789";
+
+        let error = write_member(&dest, 1, &ten_bytes[..], 4).unwrap_err();
+
+        assert!(error.to_string().contains("larger than"), "{error}");
+        assert!(!dest.exists(), "the partial file must not be left behind");
+    }
+
+    /// The ordinary case still works, through the same helper.
+    #[test]
+    fn a_member_within_the_limit_is_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("pmpx");
+
+        write_member(&dest, 5, &b"hello"[..], 16).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hello");
     }
 }
