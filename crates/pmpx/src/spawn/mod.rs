@@ -21,7 +21,7 @@ use std::path::Path;
 use pmpx_plugin::CommandSpec;
 
 use crate::debug;
-use crate::error::{PmpxError, Result};
+use crate::error::{error_line, note_line, PmpxError, Result};
 use crate::style;
 
 mod command;
@@ -92,11 +92,15 @@ fn exit_code_of(status: std::process::ExitStatus) -> u8 {
         if (0..=255).contains(&code) {
             return code as u8;
         }
-        // On Windows an exit code can be any u32, while Unix only keeps the low 8 bits. Take
-        // the low 8 bits instead of erroring -- the user's script cares about "nonzero", not
-        // the exact value.
-        error_line(format!(
-            "backend exit code {code} is outside 0-255, passing through the low 8 bits"
+        // On Windows an exit code can be any u32 -- `code()` reinterprets those bits as `i32`, so
+        // it is printed back as unsigned, or `exit /b -1` would read as "-1" instead of
+        // 4294967295. Take the low 8 bits instead of erroring: the user's script cares about
+        // "nonzero", not the exact value.
+        note_line(format!(
+            "the backend exited with {}, which does not fit in 8 bits; passing through the \
+             low 8 bits ({})",
+            code as u32,
+            (code & 0xFF) as u8
         ));
         return (code & 0xFF) as u8;
     }
@@ -113,15 +117,6 @@ fn exit_code_of(status: std::process::ExitStatus) -> u8 {
 
     error_line("cannot read the backend exit code, treating it as 1");
     1
-}
-
-/// One `pmpx:` diagnostic on stderr.
-fn error_line(body: impl std::fmt::Display) {
-    anstream::eprintln!(
-        "{} {}",
-        style::paint(style::ERROR, "pmpx:"),
-        style::paint(style::ERROR_BODY, body)
-    );
 }
 
 #[cfg(test)]

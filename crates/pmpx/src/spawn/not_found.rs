@@ -55,7 +55,10 @@ fn name_matches(wanted_lower: &str, candidate: &str) -> bool {
 
 /// Find near-matching files in PATH.
 fn near_misses(wanted_lower: &str) -> Vec<PathBuf> {
-    let Ok(path_var) = std::env::var("PATH") else {
+    // `var_os` rather than `var`: a PATH that is not valid UTF-8 is legal (any byte except NUL),
+    // and `var` would report it as absent -- degrading the whole hint to "probably not installed
+    // at all", which is the opposite of what this module is for.
+    let Some(path_var) = std::env::var_os("PATH") else {
         return Vec::new();
     };
 

@@ -234,11 +234,7 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
         }
         Err(e) => {
             // Being offline or having no network must not hide the local information
-            anstream::eprintln!(
-                "{} {}",
-                style::paint(style::ERROR, "pmpx:"),
-                style::paint(style::ERROR_BODY, format!("crates.io lookup failed: {e}"))
-            );
+            crate::error::error_line(format!("crates.io lookup failed: {e}"));
         }
     }
 

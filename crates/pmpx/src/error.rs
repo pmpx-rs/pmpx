@@ -83,3 +83,30 @@ impl From<crate_plugin_kit::KitError> for PmpxError {
         PmpxError::Other(anyhow::Error::new(e))
     }
 }
+
+// ---- How pmpx's own words reach stderr ------------------------------------
+
+/// One `pmpx: <message>` line on stderr, in the error style.
+///
+/// The one place that knows the shape of pmpx's own messages: an error on the way out of `main`,
+/// a failed plugin load, a crates.io lookup that did not answer. A script scanning for `pmpx:` and
+/// a person reading the terminal then see the same thing from every command.
+pub fn error_line(body: impl std::fmt::Display) {
+    anstream::eprintln!(
+        "{} {}",
+        crate::style::paint(crate::style::ERROR, "pmpx:"),
+        crate::style::paint(crate::style::ERROR_BODY, body)
+    );
+}
+
+/// The same `pmpx:` prefix, dimmed: something worth saying that is **not** a failure.
+///
+/// A backend's unusual exit code belongs here rather than in [`error_line`]: pmpx is passing it
+/// through as it promised, and marking that with the error style would make a script -- or a
+/// reader -- treat a working run as a broken one.
+pub fn note_line(body: impl std::fmt::Display) {
+    anstream::eprintln!(
+        "{}",
+        crate::style::paint(crate::style::DIM, format!("pmpx: {body}"))
+    );
+}
