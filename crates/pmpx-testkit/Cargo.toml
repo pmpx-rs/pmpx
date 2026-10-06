@@ -16,7 +16,6 @@ categories = ["development-tools"]
 [dependencies]
 pmpx-plugin.workspace = true
 pmpx-detect.workspace = true
-pmpx-project.workspace = true
 # The fixture writes a real directory: the detection is the real one, so the project has to be too.
 tempfile = "3"
 

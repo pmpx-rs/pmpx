@@ -506,7 +506,6 @@ version = "0.3.0"
 dependencies = [
  "pmpx-detect",
  "pmpx-plugin",
- "pmpx-project",
  "tempfile",
 ]
 

@@ -317,9 +317,18 @@ jobs:
   # choosing a C ABI instead of a Rust trait. Without this job it is just a sentence in the
   # docs -- and it happens to be the foundation most worth stressing in the whole scheme.
   #
-  # The method: build the plugin with the contract crate's MSRV, build the host (and all its
-  # dependencies) with stable, and let the stable host dlopen the cdylib produced by the
-  # older toolchain. The gap between the two ends is as wide as it gets.
+  # The method: build the plugin crate with the contract crate's MSRV and the host with stable,
+  # so a plugin that quietly needs a newer rustc fails here instead of at someone's
+  # `cargo install`.
+  #
+  # The load half -- a stable host `dlopen`ing an MSRV-built cdylib -- is what `pmpx-loader`'s own
+  # e2e test does (`cargo test -p pmpx-loader --test dlopen`): it builds the fixture and loads it.
+  # This job used to drive that test against a pre-built artifact through
+  # `PMPX_TEST_PREBUILT_LIB`, a variable nothing has read since that test was reworked; the step
+  # and the variable are gone rather than left behind as a comment that pretends otherwise.
+  #
+  # The job's own name is kept: it is a required check, and renaming it would change the name
+  # branch protection looks for.
   # ---------------------------------------------------------------------------
   cross-toolchain:
     name: Cross-toolchain load
@@ -356,20 +365,13 @@ jobs:
             --target-dir "$RUNNER_TEMP/plugin-target"
           ls -la "$RUNNER_TEMP/plugin-target/release" | grep pmpx_plugin_toy
 
-      # `PMPX_TEST_PREBUILT_LIB` makes the cdylib e2e test skip compilation and use the
-      # ready-made artifact directly. So the same assertions run against objects produced by
-      # **two different rustcs**.
-      #
-      # This job only runs on ubuntu, so the .so path can be hard-coded.
-      - name: Drive it from a stable-built host
-        env:
-          PMPX_TEST_PREBUILT_LIB: ${{ runner.temp }}/plugin-target/release/libpmpx_plugin_toy.so
-        run: cargo test --locked --test cdylib
+      # No step drives that artifact into a test: the loader's e2e test always builds its own
+      # fixture, so a pre-built library cannot be handed to it. What this job proves is the build
+      # half of the claim, on the oldest toolchain the contract supports.
 
       - name: Record what was actually verified
         run: |
           set -euo pipefail
           echo "plugin built by : $(cargo +${{ steps.msrv.outputs.version }} --version)"
           echo "host built by   : $(cargo --version)"
-          echo "→ a cdylib built with ${{ steps.msrv.outputs.version }} was loaded by a stable-built host,"
-          echo "  called across the boundary, and had a panic safely contained."
+          echo "→ the plugin crate builds with ${{ steps.msrv.outputs.version }} and with stable."
