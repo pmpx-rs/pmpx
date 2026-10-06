@@ -16,12 +16,16 @@ fn main() {
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
 
     // Write "unknown" when it cannot be asked -- this field is only for diagnostics, and failing
-    // to get it should not break the build.
+    // to get it should not break the build. The tests accept that value for the same reason, so
+    // "the build tolerated it" and "the test suite passes" cannot disagree.
     let version = Command::new(&rustc)
         .arg("--version")
         .output()
         .ok()
         .and_then(|out| String::from_utf8(out.stdout).ok())
+        // Only the first line: `rustc --version` prints one, and a second line would be cut in
+        // half by the `cargo:rustc-env` line format and never noticed.
+        .and_then(|s| s.lines().next().map(str::to_string))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());

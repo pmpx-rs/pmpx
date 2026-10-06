@@ -73,6 +73,11 @@ macro_rules! export {
             })
         }
 
+        // Compile-time proof that the shell's shape is the shape the vtable declares: if the two
+        // ever drift, this stops compiling instead of becoming a call through the wrong function
+        // type (which `ABI_VERSION` cannot catch, because it would not change).
+        const _: $crate::abi::CommandFn = __pmpx_command;
+
         #[doc(hidden)]
         unsafe extern "C" fn __pmpx_free_str(s: $crate::abi::PmpxStr) {
             // SAFETY: the host only calls this through the pointer in the vtable, and the vtable

@@ -116,6 +116,21 @@ pub struct PmpxCommand {
 // length".
 unsafe impl Sync for PmpxCommand {}
 
+/// The exact shape of [`PmpxPluginV1::command`].
+///
+/// Spelled out once so the vtable field, the `export!` shell and the dispatcher cannot drift
+/// apart. A mismatch would mean the host calling a function of a different shape -- undefined
+/// behaviour that `ABI_VERSION` cannot catch, because the version would not change.
+pub type CommandFn = unsafe extern "C" fn(
+    project_root: PmpxStr,
+    matched: *const PmpxStr,
+    matched_len: usize,
+    verb: u32,
+    args: *const PmpxStr,
+    args_len: usize,
+    out: *mut PmpxCommand,
+) -> u32;
+
 /// The only struct a plugin exports, and it is that table of function pointers; once the host has
 /// obtained it, every interaction goes through these pointers, with no trait object and none of
 /// the UB that comes from converting between vtables.
@@ -155,15 +170,7 @@ pub struct PmpxPluginV1 {
     /// - a panic must not cross this boundary: since Rust 1.81, unwinding across `extern "C"`
     ///   aborts the process and the host's `catch_unwind` cannot save it, so `export!` wraps every
     ///   shim -- this one and the `name` / `family` ones -- in `catch_unwind`.
-    pub command: unsafe extern "C" fn(
-        project_root: PmpxStr,
-        matched: *const PmpxStr,
-        matched_len: usize,
-        verb: u32,
-        args: *const PmpxStr,
-        args_len: usize,
-        out: *mut PmpxCommand,
-    ) -> u32,
+    pub command: CommandFn,
 
     /// Free the memory held by the values returned from [`PmpxPluginV1::name`] /
     /// [`PmpxPluginV1::family`].
@@ -241,10 +248,18 @@ mod tests {
 
         let rustc = unsafe { std::slice::from_raw_parts(rustc.ptr, rustc.len) };
         let target = unsafe { std::slice::from_raw_parts(target.ptr, target.len) };
+        let rustc = std::str::from_utf8(rustc).unwrap();
+        let target = std::str::from_utf8(target).unwrap();
+
+        // `build.rs` writes `unknown` when it could not ask, on purpose: this is diagnostics, not
+        // a hard requirement. The assertion is therefore "filled in", not "a version".
         assert!(
-            std::str::from_utf8(rustc).unwrap().contains("rustc"),
-            "rustc_version should look like `rustc 1.x.y (...)`"
+            rustc == "unknown" || rustc.contains("rustc"),
+            "rustc_version should look like `rustc 1.x.y (...)`: {rustc:?}"
         );
-        assert!(std::str::from_utf8(target).unwrap().contains('-'));
+        assert!(
+            target == "unknown" || target.contains('-'),
+            "target should be a triple: {target:?}"
+        );
     }
 }

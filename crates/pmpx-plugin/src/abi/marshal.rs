@@ -64,6 +64,10 @@ pub unsafe fn read_os(s: PmpxStr) -> OsString {
 /// Read the bytes the host passed in as a `&str`, checking UTF-8; a failure returns
 /// [`PMPX_ERR_INVALID_ARGS`], and never `from_utf8_unchecked` -- that would assume the host is
 /// always correct, and the whole job of this ABI is not to make that assumption.
+///
+/// The reference borrows memory the host owns, and [`PmpxStr`] carries no lifetime, so `'a` is
+/// chosen by the caller: it must not outlive the call, and it is never `'static`. Callers that need
+/// to keep the text have to copy it ([`read_os`] does, by building an owned `OsString`).
 /// # Safety
 /// Same as [`read_os`].
 pub unsafe fn read_str<'a>(s: PmpxStr) -> Result<&'a str, u32> {

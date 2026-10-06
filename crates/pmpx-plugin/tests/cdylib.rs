@@ -107,6 +107,21 @@ fn workspace_target_dir() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
+/// The entry symbol is written down in three places -- this crate's constant, the name the
+/// `export!` shell defines, and the one `crate-plugin-kit` derives from `id` -- and a plugin cannot
+/// be loaded when they drift. The `shim` tests call through the symbol `export!` generated, so this
+/// pins the third copy: the one the host asks the loader for.
+#[test]
+fn the_kit_derives_the_entry_symbol_from_the_contract_crate() {
+    let cfg = KitConfig::new("pmpx");
+
+    assert_eq!(
+        cfg.entry_symbol,
+        pmpx_plugin::abi::ENTRY_SYMBOL.as_bytes(),
+        "the kit's derived entry symbol must be the one the contract crate declares"
+    );
+}
+
 /// Lay out a plugin library directory and return (a temp dir kept alive, the kit).
 fn store_with_fixture(lib: &Path) -> (tempfile::TempDir, CratePluginKit<PmpxPluginV1>) {
     let tmp = tempfile::tempdir().expect("should be able to create a temp dir");

@@ -21,7 +21,7 @@ mod types;
 pub use dispatch::{dispatch_command, free_command, guard, guard_str, write_command, PANIC_MARKER};
 pub use marshal::{bytes_to_os, free_str, leak_bytes, leak_str, os_to_bytes, read_os, read_str};
 pub use types::{
-    build_rustc, build_target, PmpxCommand, PmpxPluginV1, PmpxStr, ABI_VERSION, ENTRY_SYMBOL,
-    PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_OK, VERB_BUILD,
-    VERB_EXEC, VERB_INSTALL, VERB_REMOVE, VERB_RUN, VERB_TEST, VERB_UPDATE,
+    build_rustc, build_target, CommandFn, PmpxCommand, PmpxPluginV1, PmpxStr, ABI_VERSION,
+    ENTRY_SYMBOL, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_OK,
+    VERB_BUILD, VERB_EXEC, VERB_INSTALL, VERB_REMOVE, VERB_RUN, VERB_TEST, VERB_UPDATE,
 };

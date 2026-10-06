@@ -86,6 +86,11 @@ impl Session {
 
         kit_cfg.prefer_prebuilt = global.plugin_store.effective_prefer_prebuilt();
 
+        // The entry symbol is written down in the contract crate, because that is where the
+        // `export!` shell that defines it lives. `crate-plugin-kit` derives the same name from
+        // `id`, so this hands over the authoritative one instead of keeping a third copy.
+        kit_cfg.entry_symbol = pmpx_plugin::abi::ENTRY_SYMBOL.as_bytes().to_vec();
+
         let t = debug::now();
         let kit = CratePluginKit::<PmpxPluginV1>::new(kit_cfg).with_context(|| {
             format!(

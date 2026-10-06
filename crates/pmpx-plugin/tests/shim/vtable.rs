@@ -15,8 +15,16 @@ fn build_info_is_visible_for_diagnostics() {
     let rustc = unsafe { read(e.rustc_version) };
     let target = unsafe { read(e.target) };
 
-    assert!(rustc.contains("rustc"), "rustc_version = {rustc:?}");
-    assert!(target.contains('-'), "target = {target:?}");
+    // `build.rs` writes `unknown` when it could not ask -- diagnostics only, so the invariant is
+    // that the field is filled, not that a version was available.
+    assert!(
+        rustc == "unknown" || rustc.contains("rustc"),
+        "rustc_version = {rustc:?}"
+    );
+    assert!(
+        target == "unknown" || target.contains('-'),
+        "target = {target:?}"
+    );
 }
 
 #[test]
