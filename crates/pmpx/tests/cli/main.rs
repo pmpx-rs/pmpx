@@ -17,6 +17,7 @@
 mod config;
 mod config_set;
 mod detection;
+mod json;
 mod local;
 mod plugins;
 mod scripts;

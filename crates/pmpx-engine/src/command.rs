@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::Plan;
+use crate::{ChildOutput, Plan};
 
 use super::resolve::{resolve, ProgramKind};
 use crate::error::{EngineError, Result};
@@ -22,7 +22,7 @@ use crate::error::{EngineError, Result};
 /// applied here rather than by every caller, so a plugin's `cwd` cannot silently depend on the
 /// caller remembering to apply it. It is also decided *before* the program is resolved, so a
 /// relative program is looked up in the directory the process will actually run in.
-pub fn command_for(plan: &Plan, cwd: &Path) -> Result<Command> {
+pub fn command_for(plan: &Plan, cwd: &Path, child_output: ChildOutput) -> Result<Command> {
     let cwd = plan.cwd.as_deref().unwrap_or(cwd);
     let resolved = resolve(&plan.program, cwd)?;
 
@@ -64,10 +64,50 @@ pub fn command_for(plan: &Plan, cwd: &Path) -> Result<Command> {
     // The environment is inherited verbatim -- pmpx takes no part in proxies / mirrors /
     // registry switching; those are configured in the shell.
     cmd.stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
+        .stdout(match child_output {
+            ChildOutput::Inherit => Stdio::inherit(),
+            // The child's stdout becomes *our* stderr: live, visible, and out of the JSON stream.
+            ChildOutput::OnStderr => our_stderr()?,
+        })
         .stderr(Stdio::inherit());
 
     Ok(cmd)
+}
+
+/// pmpx's own stderr, as something a child can write to.
+///
+/// A duplicated handle rather than a captured pipe, so the backend keeps writing live and keeps
+/// believing it has a terminal. Both branches are safe: `try_clone_to_owned` gives an owned
+/// descriptor, and `Stdio` takes it from there.
+fn our_stderr() -> Result<Stdio> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        return Ok(Stdio::from(
+            std::io::stderr()
+                .as_fd()
+                .try_clone_to_owned()
+                .map_err(|error| {
+                    EngineError::Setup(format!("cannot redirect the backend output: {error}"))
+                })?,
+        ));
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle;
+        return Ok(Stdio::from(
+            std::io::stderr()
+                .as_handle()
+                .try_clone_to_owned()
+                .map_err(|error| {
+                    EngineError::Setup(format!("cannot redirect the backend output: {error}"))
+                })?,
+        ));
+    }
+
+    #[allow(unreachable_code)]
+    Ok(Stdio::inherit())
 }
 
 /// PowerShell to run a `.ps1` shim with: PowerShell 7 first, then the one Windows ships.
@@ -96,7 +136,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let spec = Plan::new("pmpx-definitely-not-a-real-program-xyz");
 
-        assert!(command_for(&spec, tmp.path()).is_err());
+        assert!(command_for(&spec, tmp.path(), ChildOutput::Inherit).is_err());
     }
 
     /// A `cwd` the plugin asked for has to win over the caller's directory, wherever the caller
@@ -107,7 +147,7 @@ mod tests {
         let inner = tempfile::tempdir().unwrap();
 
         let spec = Plan::new("cargo").arg("--version").cwd(inner.path());
-        let cmd = command_for(&spec, outer.path()).unwrap();
+        let cmd = command_for(&spec, outer.path(), ChildOutput::Inherit).unwrap();
 
         assert_eq!(cmd.get_current_dir(), Some(inner.path()));
     }
@@ -118,7 +158,7 @@ mod tests {
         let outer = tempfile::tempdir().unwrap();
         let spec = Plan::new("cargo").arg("--version");
 
-        let cmd = command_for(&spec, outer.path()).unwrap();
+        let cmd = command_for(&spec, outer.path(), ChildOutput::Inherit).unwrap();
         assert_eq!(cmd.get_current_dir(), Some(outer.path()));
     }
 }

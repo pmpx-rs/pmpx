@@ -216,6 +216,7 @@ pub enum Event {
 pub fn run(
     plan: &Plan,
     fallback_cwd: &Path,
+    child_output: ChildOutput,
     events: &mut dyn FnMut(Event),
 ) -> Result<u8, EngineError> {
     // Resolving is a PATH lookup plus a stat, and failing it is the setup kind of error: the caller
@@ -235,7 +236,7 @@ pub fn run(
 
     events(Event::Starting { plan: plan.clone() });
 
-    let mut cmd = command::command_for(plan, fallback_cwd)?;
+    let mut cmd = command::command_for(plan, fallback_cwd, child_output)?;
 
     // This is the backend's own runtime, from here until its process exits: usually the whole of what a
     // user perceives as "pmpx is slow", and never pmpx's own time.
@@ -291,6 +292,22 @@ fn exit_code_of(status: std::process::ExitStatus, events: &mut dyn FnMut(Event))
     1
 }
 
+/// Where a started program's own output goes.
+///
+/// `Inherit` is the normal case, and the reason pmpx captures nothing: the backend's output stays
+/// live, keeps its colours (it still sees a terminal), and `pmpx build > log` keeps meaning what it
+/// always meant.
+///
+/// `OnStderr` is for `--json`, where stdout is a JSON stream a program is parsing: the backend writes
+/// to pmpx's stderr instead, so it stays live and visible without ever landing in that stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildOutput {
+    /// Hand the child pmpx's own stdin, stdout and stderr.
+    Inherit,
+    /// Hand the child pmpx's stderr for its stdout too, keeping pmpx's stdout for pmpx.
+    OnStderr,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,7 +315,9 @@ mod tests {
     /// Collect the events one run produced.
     fn run_collecting(plan: &Plan, cwd: &Path) -> (Result<u8, EngineError>, Vec<Event>) {
         let mut events = Vec::new();
-        let code = run(plan, cwd, &mut |event| events.push(event));
+        let code = run(plan, cwd, ChildOutput::Inherit, &mut |event| {
+            events.push(event)
+        });
         (code, events)
     }
 
@@ -356,7 +375,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let plan = Plan::new("cargo").arg("--version");
 
-        assert_eq!(run(&plan, tmp.path(), &mut |_| {}).unwrap(), 0);
+        assert_eq!(
+            run(&plan, tmp.path(), ChildOutput::Inherit, &mut |_| {}).unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -404,7 +426,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let plan = Plan::new("cargo").arg("--version").cwd(tmp.path());
 
-        let mut cmd = command_for(&plan, Path::new("/definitely/not/here")).unwrap();
+        let mut cmd = command_for(
+            &plan,
+            Path::new("/definitely/not/here"),
+            ChildOutput::Inherit,
+        )
+        .unwrap();
         assert!(cmd.output().unwrap().status.success());
     }
 
@@ -451,7 +478,10 @@ mod tests {
         std::fs::write(&shim, "@echo off\r\nexit 0\r\n").unwrap();
 
         let plan = Plan::new(shim.as_os_str());
-        assert_eq!(run(&plan, tmp.path(), &mut |_| {}).unwrap(), 0);
+        assert_eq!(
+            run(&plan, tmp.path(), ChildOutput::Inherit, &mut |_| {}).unwrap(),
+            0
+        );
     }
 
     /// An argument with spaces has to arrive verbatim too.
@@ -469,7 +499,10 @@ mod tests {
 
         let plan = Plan::new(shim.as_os_str()).arg("hello world");
 
-        assert_eq!(run(&plan, tmp.path(), &mut |_| {}).unwrap(), 0);
+        assert_eq!(
+            run(&plan, tmp.path(), ChildOutput::Inherit, &mut |_| {}).unwrap(),
+            0
+        );
         assert_eq!(
             std::fs::read_to_string(&out_file).unwrap().trim(),
             "hello world"
@@ -484,7 +517,10 @@ mod tests {
         std::fs::write(&shim, "@echo off\r\nexit /b 42\r\n").unwrap();
 
         let plan = Plan::new(shim.as_os_str());
-        assert_eq!(run(&plan, tmp.path(), &mut |_| {}).unwrap(), 42);
+        assert_eq!(
+            run(&plan, tmp.path(), ChildOutput::Inherit, &mut |_| {}).unwrap(),
+            42
+        );
     }
 
     /// `&`, `|`, `>` and `^` are separators, pipes, redirections and escapes to `cmd.exe`, which
@@ -507,7 +543,7 @@ mod tests {
         for arg in ["a&b", "a|b", "a>b", "^caret"] {
             let plan = Plan::new(shim.as_os_str()).arg(arg);
             assert_eq!(
-                run(&plan, tmp.path(), &mut |_| {}).unwrap(),
+                run(&plan, tmp.path(), ChildOutput::Inherit, &mut |_| {}).unwrap(),
                 0,
                 "the shim failed on {arg}"
             );

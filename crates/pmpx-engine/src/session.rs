@@ -22,6 +22,7 @@ use crate::discovery::{self, StopReason, Walk};
 use crate::error::Result;
 use crate::log::Levels;
 use crate::store::{InstalledPlugin, PluginSet};
+use crate::ChildOutput;
 use crate::{EngineError, Event};
 
 /// What the command line said, as this crate needs it.
@@ -37,6 +38,8 @@ pub struct Options {
     pub quiet: bool,
     /// `--debug`: whether the trace is on, which also decides how loud a plugin may be.
     pub trace: bool,
+    /// `--json`: hand the backend pmpx's stderr for its stdout, keeping stdout a JSON stream.
+    pub child_output_on_stderr: bool,
     /// The contract version to ask the store for, which is the host's own version.
     pub contract_version: String,
 }
@@ -64,6 +67,8 @@ pub struct Session {
     pub quiet: bool,
     /// `--debug`: whether the trace is on.
     trace: bool,
+    /// `--json`: the backend's own output goes to stderr, so stdout stays a JSON stream.
+    pub(crate) child_output_on_stderr: bool,
 }
 
 impl Session {
@@ -205,6 +210,7 @@ impl Session {
             wanted_plugin: options.wanted_plugin,
             quiet: options.quiet,
             trace: options.trace,
+            child_output_on_stderr: options.child_output_on_stderr,
         })
     }
 
@@ -475,6 +481,18 @@ impl Session {
         Ok(self.kit.view(crate_name)?)
     }
 }
+/// How this run hands a started program its stdio.
+impl Session {
+    /// Where the backend's own output should go.
+    pub(crate) fn child_output(&self) -> ChildOutput {
+        if self.child_output_on_stderr {
+            ChildOutput::OnStderr
+        } else {
+            ChildOutput::Inherit
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

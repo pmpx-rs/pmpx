@@ -58,6 +58,9 @@ fn main() -> std::process::ExitCode {
     }
     debug::done("cli.parse", t, || "argv -> Cli");
 
+    // Set before any command runs: everything from here on renders through `runtime::render_event`.
+    runtime::set_json(args.json);
+
     let code = dispatch(&args);
     debug::total(code);
     std::process::ExitCode::from(code)
@@ -65,6 +68,29 @@ fn main() -> std::process::ExitCode {
 
 /// Run once and return the process exit code -- which may come from the backend.
 fn dispatch(args: &cli::Cli) -> u8 {
+    // `--json` is a contract, so it is either honoured or refused: a command whose result is a human
+    // table says so, rather than quietly mixing prose into the stream a caller is parsing.
+    if args.json
+        && !matches!(
+            args.command,
+            // No subcommand at all is clap printing help, which is not a result a script asked for.
+            None | Some(
+                cli::Command::Install { .. }
+                    | cli::Command::Remove { .. }
+                    | cli::Command::Run { .. }
+                    | cli::Command::Build { .. }
+                    | cli::Command::Test { .. }
+                    | cli::Command::Update { .. }
+                    | cli::Command::Exec { .. }
+            )
+        )
+    {
+        error::error_line(error::PmpxError::Usage(
+            "`--json` is not supported by this command yet".to_string(),
+        ));
+        return error::EXIT_USAGE;
+    }
+
     match commands::dispatch(args) {
         Ok(code) => code,
         Err(e) => {

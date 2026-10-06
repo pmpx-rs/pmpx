@@ -18,6 +18,13 @@ use clap::{Parser, Subcommand};
     arg_required_else_help = false,
 )]
 pub struct Cli {
+    /// Print what happens as JSON -- one object per line, on stdout -- instead of the human text.
+    ///
+    /// Only the execution commands have a JSON form: stdout is then a stream a program can read, and
+    /// everything meant for a person (including the backend's own output) goes to stderr. A command
+    /// whose result is a table refuses the flag rather than mixing prose into the stream.
+    #[arg(long = "json", global = true)]
+    pub json: bool,
     /// Use this plugin for now, overriding `.pmpx.toml`
     ///
     /// A one-off override that is not written to disk. To pin it, use `pmpx plugin set`.

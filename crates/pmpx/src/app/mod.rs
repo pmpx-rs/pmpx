@@ -29,6 +29,8 @@ pub fn options(args: &Cli) -> Options {
         wanted_plugin: args.plugin.clone(),
         quiet: args.quiet,
         trace: debug::enabled(),
+        // --json keeps stdout a JSON stream, so the backend writes to stderr instead.
+        child_output_on_stderr: args.json,
         // The workspace carries a single version, so this is also the contract's version.
         contract_version: env!("CARGO_PKG_VERSION").to_string(),
     }
@@ -61,7 +63,7 @@ impl Sink {
         if let Event::Notes { plugin, .. } = &event {
             self.plugin.clone_from(plugin);
         }
-        crate::runtime::render(&self.plugin, event);
+        crate::runtime::render_event(&self.plugin, event);
     }
 }
 

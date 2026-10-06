@@ -21,6 +21,7 @@ use pmpx_plugin::Verb;
 use crate::error::Result;
 use crate::files::Declared;
 use crate::session::Session;
+use crate::ChildOutput;
 use crate::{detect, Call, EngineError, Event, Plan};
 
 /// Run one verb all the way.
@@ -37,7 +38,12 @@ pub fn run_verb(
             // `exec` is the escape hatch: it has to work with zero plugins too, and with no project root
             // it falls back to the start directory.
             if allow_exec_fallback {
-                return passthrough(&session.start_dir.clone(), args, events);
+                return passthrough(
+                    &session.start_dir.clone(),
+                    args,
+                    session.child_output(),
+                    events,
+                );
             }
             return Err(session.no_project_error());
         }
@@ -47,7 +53,7 @@ pub fn run_verb(
         Ok(selection) => selection,
         Err(failure) => {
             if allow_exec_fallback {
-                return passthrough(&root, args, events);
+                return passthrough(&root, args, session.child_output(), events);
             }
             // Every refusal to choose is a value, and the caller turns it into exit code 3.
             return Err(EngineError::Detect(failure));
@@ -81,11 +87,11 @@ pub fn run_verb(
     match backend.command(&call, events) {
         Ok(answer) => {
             let plan = plan_of(answer);
-            crate::run(&plan, &root, events)
+            crate::run(&plan, &root, session.child_output(), events)
         }
 
         Err(pmpx_loader::CallError::UnsupportedVerb) if allow_exec_fallback => {
-            passthrough(&root, args, events)
+            passthrough(&root, args, session.child_output(), events)
         }
 
         Err(error) => Err(EngineError::Call {
@@ -127,14 +133,19 @@ pub fn run_script(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| session.start_dir.clone());
 
-    Some(crate::run(&plan, &cwd, events))
+    Some(crate::run(&plan, &cwd, session.child_output(), events))
 }
 
 /// Run the user's own command line, verbatim, in `cwd`.
 ///
 /// Only reached for `exec`, or for another verb when `exec` was asked for and nothing could answer: the
 /// escape hatch has to work with no plugins, no project, and no detection.
-fn passthrough(cwd: &Path, args: &[OsString], events: &mut dyn FnMut(Event)) -> Result<u8> {
+fn passthrough(
+    cwd: &Path,
+    args: &[OsString],
+    child_output: ChildOutput,
+    events: &mut dyn FnMut(Event),
+) -> Result<u8> {
     let Some((program, rest)) = args.split_first() else {
         return Err(EngineError::Usage(
             "nothing to run: `pmpx exec` needs a command".to_string(),
@@ -142,7 +153,7 @@ fn passthrough(cwd: &Path, args: &[OsString], events: &mut dyn FnMut(Event)) -> 
     };
 
     let plan = Plan::new(program.clone()).args(rest.iter());
-    crate::run(&plan, cwd, events)
+    crate::run(&plan, cwd, child_output, events)
 }
 
 /// A plugin's answer as the engine's plan: the same three fields, and nothing else crosses.
@@ -180,7 +191,8 @@ mod tests {
     /// `exec` without a command is a usage error, not a crash.
     #[test]
     fn an_empty_passthrough_is_a_usage_error() {
-        let error = passthrough(Path::new("/tmp"), &[], &mut |_| {}).unwrap_err();
+        let error =
+            passthrough(Path::new("/tmp"), &[], ChildOutput::Inherit, &mut |_| {}).unwrap_err();
 
         assert!(matches!(error, EngineError::Usage(_)), "{error:?}");
     }
