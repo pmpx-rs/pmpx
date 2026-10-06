@@ -72,18 +72,6 @@ impl PmpxError {
     }
 }
 
-/// A failure reported by the plugin store (installing, removing, reading a manifest, a crates.io
-/// query) lands in [`PmpxError::Other`] — but as a **wrapped error**, not as a formatted string.
-///
-/// `KitError` carries `#[source]` detail (`ManifestParse` on a broken manifest, `PluginInUse` on a
-/// library still loaded, and so on); turning it into text at the boundary would throw that away for
-/// every later reader. The message shown to the user is unchanged either way.
-impl From<crate_plugin_kit::KitError> for PmpxError {
-    fn from(e: crate_plugin_kit::KitError) -> Self {
-        PmpxError::Other(anyhow::Error::new(e))
-    }
-}
-
 // ---- How pmpx's own words reach stderr ------------------------------------
 
 /// One `pmpx: <message>` line on stderr, in the error style.
@@ -132,7 +120,7 @@ impl From<pmpx_engine::EngineError> for PmpxError {
             // The plugin store refused: a network failure, a build that would not compile, a crate that
             // is not there. The kit's message says which, and pmpx has nothing to add -- so this is
             // pmpx's own failure, not the user's usage.
-            EngineError::Kit(error) => PmpxError::Other(anyhow::anyhow!(error)),
+            EngineError::Kit(error) => PmpxError::Other(anyhow::Error::new(error)),
 
             // The plugin answered normally that it cannot do this: a usage error if that is what it said,
             // and pmpx's own failure if it broke.

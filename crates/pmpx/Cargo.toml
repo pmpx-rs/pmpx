@@ -34,7 +34,6 @@ pmpx-engine = { workspace = true, features = ["store"] }
 
 # General plugin management library: install / load / cross-process lock / cache. An
 # external dependency, consumed by version.
-crate-plugin-kit.workspace = true
 
 clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
@@ -76,10 +75,10 @@ zip = { version = "5", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"
 
 [dev-dependencies]
+crate-plugin-kit.workspace = true
 tempfile = "3"
 # Integration tests use `find_library` to find the cdylib in the artifact directory
 # according to platform rules.
-crate-plugin-kit.workspace = true
 
 # `cargo binstall` finds the release on its own -- `pmpx-{target}.{tar.gz,zip}` is one of
 # the names it tries by default -- but our archives put the binary at their root, while

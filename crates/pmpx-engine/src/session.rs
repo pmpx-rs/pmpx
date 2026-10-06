@@ -52,7 +52,7 @@ pub struct Session {
     /// Manifest list of installed plugins (manifest reads only, no dlopen).
     pub plugins: PluginSet,
     /// Plugin library handle.
-    pub kit: CratePluginKit<PmpxPlugin>,
+    pub(crate) kit: CratePluginKit<PmpxPlugin>,
     /// The directories walk-up visited and why it stopped.
     pub walk: Walk,
     /// The project root. Computed in `open` -- it is the single answer to "where do we run", not

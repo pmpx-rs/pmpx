@@ -19,15 +19,36 @@ pub(super) const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 pub(super) const MAX_ASSET_BYTES: u64 = 128 * 1024 * 1024;
 
 /// `(owner, repo)` of the releases, out of the manifest's repository URL.
+///
+/// Eight lines rather than a dependency: this is the whole of what `self update` needs to know about
+/// GitHub, and a URL it cannot read is reported rather than guessed at.
 pub(super) fn repository_parts() -> anyhow::Result<(String, String)> {
-    crate_plugin_kit::install::prebuilt::parse_github_repo(REPOSITORY).ok_or_else(|| {
-        anyhow!("`pmpx self update` only knows how to read GitHub releases, and {REPOSITORY} is not a GitHub repository")
-    })
+    let not_github = || {
+        anyhow!(
+            "`pmpx self update` only knows how to read GitHub releases, and {REPOSITORY} is not a \
+             GitHub repository"
+        )
+    };
+
+    let rest = REPOSITORY
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .strip_prefix("https://github.com/")
+        .or_else(|| REPOSITORY.strip_prefix("http://github.com/"))
+        .ok_or_else(not_github)?;
+
+    let (owner, repo) = rest.split_once('/').ok_or_else(not_github)?;
+
+    if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+        return Err(not_github());
+    }
+
+    Ok((owner.to_string(), repo.to_string()))
 }
 
 /// `pmpx-<target>`, the part of the asset name that is the same on every platform.
 pub(super) fn asset_stem() -> String {
-    format!("pmpx-{}", crate_plugin_kit::TARGET_TRIPLE)
+    format!("pmpx-{}", env!("PMPX_TARGET"))
 }
 
 /// The archive a platform publishes: a zip on Windows, a tarball everywhere else.
@@ -139,10 +160,7 @@ mod tests {
 
     #[test]
     fn the_asset_stem_carries_the_target() {
-        assert_eq!(
-            asset_stem(),
-            format!("pmpx-{}", crate_plugin_kit::TARGET_TRIPLE)
-        );
+        assert_eq!(asset_stem(), format!("pmpx-{}", env!("PMPX_TARGET")));
     }
 
     /// A refused request has two possible causes and the message has to name both, because there

@@ -35,7 +35,7 @@ pub(super) fn plugin_add(
         // A path is installed the path way: `plugin add .` in a plugin checkout builds and installs
         // what is there, which is the development loop. Anything else is a plugin *name*, looked up
         // on crates.io.
-        if let Some(dir) = checkout_of(name, &session.kit.config().manifest_name) {
+        if let Some(dir) = checkout_of(name, session.manifest_name()) {
             anstream::println!("Installing {}...", style::paint(style::PM, name));
             match install_checkout(&session, &dir) {
                 Ok(installed) => {
@@ -63,7 +63,7 @@ pub(super) fn plugin_add(
 
         anstream::println!("Installing {}...", style::paint(style::PM, name));
 
-        match session.kit.install(name, version) {
+        match session.install(name, version) {
             Ok(installed) => {
                 anstream::println!(
                     "  {} v{} ({}) -> {}",
@@ -124,7 +124,7 @@ fn checkout_of(name: &str, manifest: &str) -> Option<PathBuf> {
 fn install_checkout(
     session: &app::Session,
     dir: &Path,
-) -> crate::error::Result<crate_plugin_kit::install::Installed> {
+) -> crate::error::Result<pmpx_engine::store::Installed> {
     if !dir.is_dir() {
         return Err(PmpxError::Usage(format!(
             "{} is not a directory, so there is no plugin to install from it",
@@ -134,33 +134,21 @@ fn install_checkout(
 
     vet_checkout(session, dir)?;
 
-    session
-        .kit
-        .install_from_path(dir)
-        .map_err(|e| PmpxError::Other(e.into()))
+    Ok(session.install_from_path(dir)?)
 }
 
-/// What the kit cannot check: whether *this host* will be able to use the checkout.
+/// What the store cannot check: whether *this host* will be able to use the checkout.
 ///
-/// What cannot work is refused. What will silently do nothing is said out loud -- those are the
-/// failures an author would otherwise chase after installing.
+/// The reading is [`pmpx_engine::store::vet_checkout`]'s -- one place that knows the manifest, and it
+/// never mentions the plugin system's own vocabulary. What a report *means* is here, because the words
+/// are presentation: what cannot work is refused, and what will silently do nothing is said out loud,
+/// since those are the failures an author would otherwise chase after installing.
 fn vet_checkout(session: &app::Session, dir: &Path) -> crate::error::Result<()> {
-    let manifest_name = &session.kit.config().manifest_name;
-    let manifest_path = dir.join(manifest_name);
-
-    if !manifest_path.is_file() {
-        return Err(PmpxError::Usage(format!(
-            "{} has no {manifest_name}, so it is not a plugin checkout",
-            dir.display()
-        )));
-    }
-
-    let manifest = crate_plugin_kit::PluginManifest::read(&manifest_path)
-        .map_err(|e| PmpxError::Usage(format!("cannot read {}: {e}", manifest_path.display())))?;
+    let report = pmpx_engine::store::vet_checkout(dir, session.manifest_name())?;
 
     // The one thing that cannot work: a plugin built against another contract version is refused at
     // `dlopen`, so installing it would only move the failure somewhere less obvious.
-    match manifest.plugin.abi {
+    match report.abi {
         Some(abi) if abi == pmpx_plugin::abi::PMPX_ABI_MAJOR => {}
         Some(abi) => {
             return Err(PmpxError::Usage(format!(
@@ -181,15 +169,14 @@ fn vet_checkout(session: &app::Session, dir: &Path) -> crate::error::Result<()> 
 
     // Everything below makes the plugin quietly do nothing. Saying so now is cheaper than finding
     // out why it never runs.
-    if manifest.plugin.family.as_deref().unwrap_or("").is_empty() {
+    if report.family.as_deref().unwrap_or("").is_empty() {
         crate::error::note_line(format!(
             "{} declares no family, so no project can ever select it",
             dir.display()
         ));
     }
 
-    let markers = markers(&manifest);
-    if markers.is_empty() {
+    if report.markers.is_empty() {
         crate::error::note_line(format!(
             "{} declares no [detect] markers, so it will never match a project",
             dir.display()
@@ -199,36 +186,12 @@ fn vet_checkout(session: &app::Session, dir: &Path) -> crate::error::Result<()> 
     Ok(())
 }
 
-/// Every `[detect]` marker the manifest declares, strong and weak together.
-fn markers(manifest: &crate_plugin_kit::PluginManifest) -> Vec<String> {
-    let mut out = str_array(manifest, "detect", "strong");
-    out.extend(str_array(manifest, "detect", "weak"));
-    out
-}
-
-/// One `[section] key = [...]` out of the host's own sections.
-fn str_array(manifest: &crate_plugin_kit::PluginManifest, section: &str, key: &str) -> Vec<String> {
-    manifest
-        .extra
-        .get(section)
-        .and_then(|section| section.get(key))
-        .and_then(|value| value.as_array())
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// `plugin rm`
 pub(super) fn plugin_rm(args: &Cli, names: &[String]) -> crate::error::Result<u8> {
     let session = app::session(args)?;
 
     for name in names {
-        session.kit.uninstall(name)?;
+        session.uninstall(name)?;
         anstream::println!("Removed {}", style::paint(style::PM, name));
     }
 
@@ -266,7 +229,7 @@ pub(super) fn plugin_update(
     }
 
     for name in targets {
-        let installed = session.kit.update(&name, version)?;
+        let installed = session.update(&name, version)?;
         anstream::println!(
             "{} -> v{}",
             installed.crate_name,
@@ -284,7 +247,7 @@ pub(super) fn plugin_search(args: &Cli, keyword: &str, limit: usize) -> crate::e
     // The user types the short name (`cargo`) while crates.io has `pmpx-plugin-cargo`. Search
     // the short name directly: crates.io search is full text, so the `pmpx-plugin-` prefix is
     // not a keyword.
-    let results = session.kit.search(keyword, limit)?;
+    let results = session.search(keyword, limit)?;
 
     if results.is_empty() {
         anstream::println!("crates.io has no crate matching {keyword:?}.");
@@ -387,8 +350,8 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
     }
 
     // The crates.io side
-    let crate_name = session.kit.config().normalize_crate_name(name);
-    match session.kit.view(&crate_name) {
+    let crate_name = session.normalize_crate_name(name);
+    match session.view(&crate_name) {
         Ok(Some(info)) => {
             found = true;
             anstream::println!("crates.io");
@@ -443,8 +406,8 @@ pub(super) fn join_or_dash(items: &[String]) -> String {
 ///
 /// A local install names the directory it was built from: that is the thing the person
 /// will want to know when they wonder why a plugin does not match what is published.
-pub(super) fn describe_source(source: &crate_plugin_kit::cache::InstallSource) -> String {
-    use crate_plugin_kit::cache::InstallSource;
+pub(super) fn describe_source(source: &pmpx_engine::store::InstallSource) -> String {
+    use pmpx_engine::store::InstallSource;
 
     match source {
         InstallSource::Prebuilt => "prebuilt".to_string(),

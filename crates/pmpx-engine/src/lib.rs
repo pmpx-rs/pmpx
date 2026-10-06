@@ -61,7 +61,7 @@ pub use session::{Options, Session};
 /// Behind a feature, and **off by default**, because it is the one part of this crate that reaches for
 /// the network and the user's disk: an embedder that only runs commands someone else installed should
 /// not pay for any of it. `crate-plugin-kit` -- and through it `ureq`, `rustls` and `ring` -- appears in
-/// this module and nowhere else in the workspace.
+/// the store module and the session that owns it, and nowhere else in the workspace.
 #[cfg(feature = "store")]
 pub mod store;
 
