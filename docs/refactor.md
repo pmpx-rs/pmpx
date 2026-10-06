@@ -316,7 +316,7 @@ impl Engine {
 | 4 | `pmpx-project` + `pmpx-detect`：纯决策 | 检测测试在**没有文件系统**的情况下运行（证据是数据）；今天的排序/pin/同分测试原样迁移；`pmpx-detect` 零依赖 —— **两步都已完成** |
 | 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出）—— **已全部完成**：设置（`Session::open` 走 `Options`，不依赖 clap）、商店（`store` 特性，默认关闭，关掉时依赖树里没有 kit/ureq/rustls/ring）、执行与事件、门面（`run_verb`/`run_script`） |
 | 6 | `pmpx` CLI：薄外壳、`--explain`、`--json`、别名展开 | 端到端测试跑真实二进制；所有人类可见输出都在这个 crate；库依赖守卫通过 |
-| 7 | `pmpx-testkit` + `pmpx plugin new/test` | 插件能对着 fixture 目录、也能对着内存文件表，用真实检测完成测试，代码一屏写得下 |
+| 7 | `pmpx-testkit`（`pmpx plugin new` / `plugin test` **决定不做**，见下） | 插件能对着 fixture 目录、也能对着内存文件表，用真实检测完成测试，代码一屏写得下 —— 已完成 |
 
 进度：第 1 步的守卫并入了第 2/3 步（先有 crate，才守得住）。
 
@@ -331,7 +331,12 @@ impl Engine {
 - **`pmpx run` 的 argv 边界已修**：`--` 分隔符原样交给插件（`args=some-target,--,--release`），插件才分得清"目标自己的参数"与"透传参数"；此前拍平后这个区分不可恢复。
 - **`pmpx-testkit` 已落地**（第 7 步的一半）：两个入口都有——手工构造 `Context`（`context()`）与**真实检测**跑 fixture 目录（`Fixture`，用 `pmpx-detect` 与清单声明的标记），外加一个假宿主 `capture()` 让插件断言自己写的日志行（每个级别一张表，和真实宿主同一套机制）。它自己的测试就按插件作者的用法写。
 - **版本号已到 0.3.0**（工作区统一版本；这次 ABI 是破版，与 `ABI_VERSION` 1→2 时一样，已发布的插件需要重编译）。
-- 仍然待做：`pmpx plugin new` / `pmpx plugin test`（第 7 步的另一半：脚手架与"在插件源码目录里跑它自己的测试"），以及 `--explain` / `--json`（第 6 步里唯一还没做的两项）。
+- **`pmpx plugin new` / `pmpx plugin test`：决定不做。** 理由：
+  - 插件 crate 只有三个文件（`Cargo.toml`、`src/lib.rs`、`pmpx-plugin.toml`），脚手架的收益低于它随契约变化而过时的速度；作者写一个 starter 仓库更合适。
+  - `plugin test` 除了包一层 `cargo test` 之外，唯一不冗余的内容只有三件单测在原理上碰不到的事：清单（TOML 不参与编译）、"以 cdylib 走宿主 loader 真的能加载"（作者不写 wrapper，且漏了 `export!` 的 rlib 照样编译通过）、"真实检测会不会选中它"（手工 `Context` 是故意绕过检测的）。这三件事有同一个根因——**作者今天无法在发布前本地装一次**（`plugin add` 只从 registry 装），所以该补的是那条回路，而不是再造一个测试命令。
+  - 那条回路的形态是 `pmpx plugin add --path <本地目录>`：kit 的 `pack::build(cfg, plugin_dir, out_dir, options)` 已公开且就是吃本地 checkout（内部走 `PluginSource::Path`，wrapper 逻辑不必重写），缺的只是"按安装布局放进商店并记录"与"装前校验清单"两步。本次也不做这条。
+  - 作者的一天因此是：`cargo test`（`pmpx-testkit` 让构造 Context / 跑 fixture 检测 / 断言日志行都是一屏代码）→ `cargo publish` → 用户 `pmpx plugin add <名字>`。
+- 仍然待做：`--explain` / `--json`（第 6 步里唯一还没做的两项）。
 
 回滚：第 3–7 步都是追加式搬迁，任何一步都可以在不碰 ABI 的前提下回退。第 2 步不可逆——它之后所有已发布插件都必须重编译，正如 `ABI_VERSION` 1 → 2 已经要求过一次的那样。
 
