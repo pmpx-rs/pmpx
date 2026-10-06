@@ -20,6 +20,12 @@ use core::ffi::c_void;
 /// capability lookup.
 pub const PMPX_ABI_MAJOR: u32 = 3;
 
+// SAFETY: a `PmpxPlugin` is a read-only table filled in from compile-time constants -- two `'static`
+// byte ranges and one function pointer -- and it is never modified after that. Function pointers are
+// `Sync`, and the byte ranges are immutable, so sharing the value between threads is sound. A plugin
+// needs this to be able to put its table in a `static`.
+unsafe impl Sync for PmpxPlugin {}
+
 /// The name of the single entry symbol a plugin exports: `extern "C" fn() -> *const PmpxPlugin`.
 ///
 /// The version in the name tracks the **root struct's layout**, not the ABI's keys: a host that

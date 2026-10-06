@@ -28,14 +28,86 @@ pub struct Command {
     pub cwd: Option<PathBuf>,
 }
 
-/// A loaded plugin: the library stays open, and every function pointer used below belongs to it.
-pub struct Plugin {
-    /// Held so the library is not unloaded while its function pointers are in use.
-    _library: Library,
+/// The tables of one plugin, checked and ready to call.
+///
+/// Split from [`Plugin`] on purpose: everything interesting -- negotiation, the identity, calling --
+/// works on the tables alone, and only the *loading* needs a library handle. That is what lets a
+/// host that embeds a plugin in the same process (a test, a harness) use this directly, and it is
+/// what its own tests exercise without a `dlopen`.
+pub struct Tables {
     root: *const PmpxPlugin,
     command: *const PmpxCommandCap,
     name: String,
     family: String,
+}
+
+impl Tables {
+    /// Check what one plugin speaks and read its identity.
+    ///
+    /// # Safety
+    ///
+    /// `root` must point at a valid [`PmpxPlugin`] whose tables and functions stay valid for as long
+    /// as this value is used -- the plugin's `'static` table, or one kept alive by a [`Plugin`].
+    pub unsafe fn from_root(root: *const PmpxPlugin, path: &Path) -> Result<Self, LoadError> {
+        let negotiated = unsafe { negotiate(root, path) }?;
+
+        Ok(Self {
+            root,
+            command: negotiated.command,
+            name: negotiated.name,
+            family: negotiated.family,
+        })
+    }
+
+    /// The name the plugin reports for itself. The caller still has to check it against the
+    /// manifest: a mismatch means the wrong thing was installed.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The ecosystem family the plugin reports for itself.
+    pub fn family(&self) -> &str {
+        &self.family
+    }
+
+    /// The rustc version and target the plugin was built with. Diagnostics only.
+    pub fn build_info(&self) -> (String, String) {
+        // These two are `'static` in the plugin and are never freed.
+        let read = |value: PmpxStr| {
+            // SAFETY: the plugin's own `'static` bytes.
+            let bytes = unsafe { value.as_bytes() }.unwrap_or(&[]);
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+
+        // SAFETY: `root` is valid for as long as this value is.
+        let root = unsafe { &*self.root };
+        (read(root.rustc_version), read(root.target))
+    }
+
+    /// Offer the host's hooks to the plugin, if it can take them.
+    ///
+    /// Called once after loading, before any call. A plugin without the `attach` capability simply
+    /// does not get them: logging is optional, being called is not.
+    pub fn attach(&self, host: &'static PmpxHost) {
+        let Some(table) = (unsafe { capability(self.root, PMPX_CAP_ATTACH) }) else {
+            return;
+        };
+        let attach: *const pmpx_plugin_abi::PmpxAttach = table.cast();
+        // SAFETY: a non-null table from `capability`; the plugin promises it stays valid.
+        unsafe { ((*attach).attach)(host) };
+    }
+
+    /// Ask the plugin to map one call to one command.
+    pub fn call(&self, source: &ContextSource<'_>) -> Result<Command, CallError> {
+        call_table(self.command, source)
+    }
+}
+
+/// A loaded plugin: the library stays open, and every function pointer in its tables belongs to it.
+pub struct Plugin {
+    /// Held so the library is not unloaded while its function pointers are in use.
+    _library: Library,
+    tables: Tables,
 }
 
 impl Plugin {
@@ -70,44 +142,27 @@ impl Plugin {
             unsafe { entry() }
         };
 
-        let negotiated = unsafe { negotiate(root, path) }?;
+        let tables = unsafe { Tables::from_root(root, path) }?;
 
         Ok(Self {
             _library: library,
-            root,
-            command: negotiated.command,
-            name: negotiated.name,
-            family: negotiated.family,
+            tables,
         })
     }
 
-    /// The name the plugin reports for itself. The caller still has to check it against the
-    /// manifest: a mismatch means the wrong thing was installed.
+    /// The tables, for everything that does not need the library handle.
+    pub fn tables(&self) -> &Tables {
+        &self.tables
+    }
+
+    /// The name the plugin reports for itself. Shorthand for `self.tables().name()`.
     pub fn name(&self) -> &str {
-        &self.name
+        self.tables.name()
     }
 
     /// The ecosystem family the plugin reports for itself.
     pub fn family(&self) -> &str {
-        &self.family
-    }
-
-    /// Offer the host's hooks to the plugin, if it can take them.
-    ///
-    /// Called once after loading, before any call. A plugin without the `attach` capability simply
-    /// does not get them: logging is optional, being called is not.
-    pub fn attach(&self, host: &'static PmpxHost) {
-        let Some(table) = (unsafe { capability(self.root, PMPX_CAP_ATTACH) }) else {
-            return;
-        };
-        let attach: *const pmpx_plugin_abi::PmpxAttach = table.cast();
-        // SAFETY: a non-null table from `capability`; the plugin promises it stays valid.
-        unsafe { ((*attach).attach)(host) };
-    }
-
-    /// Ask the plugin to map one call to one command.
-    pub fn call(&self, source: &ContextSource<'_>) -> Result<Command, CallError> {
-        call_table(self.command, source)
+        self.tables.family()
     }
 }
 

@@ -1,0 +1,20 @@
+[package]
+name = "pmpx-raw-plugin"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Single-element workspace: it lives inside the pmpx workspace's directory tree but is not a member
+# of it (the workspace only takes `crates/*`). Without this table cargo reports
+# "current package believes it's in a workspace when it's not".
+[workspace]
+
+[lib]
+name = "pmpx_plugin_raw"
+crate-type = ["cdylib"]
+
+[dependencies]
+# The raw ABI, and nothing else: this fixture is what a plugin written in C would look like, except
+# that it is written in Rust. No `pmpx-plugin`, no `export!` -- which is the point: the loader has to
+# work for a plugin that does not use the Rust contract at all.
+pmpx-plugin-abi = { path = "../../../../pmpx-plugin-abi" }
