@@ -151,7 +151,10 @@ pub enum SelfCommand {
     /// run `cargo install pmpx --force` instead.
     Update {
         /// Report what is available and change nothing
-        #[arg(long)]
+        ///
+        /// It answers a question, so it combines with neither `--version` (which asks for a
+        /// specific release) nor `--force` (which asks to reinstall).
+        #[arg(long, conflicts_with_all = ["version", "force"])]
         check: bool,
 
         /// Install this version instead of the newest one; also how a rollback is done

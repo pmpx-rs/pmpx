@@ -133,13 +133,20 @@ fn run_validated(request: &Request, requested: Option<Version>) -> anyhow::Resul
 
 /// What `--check` prints.
 fn report_check(current: &Version, latest: &Version, kind: InstallKind) {
-    if latest > current {
-        anstream::println!(
+    match latest.cmp(current) {
+        std::cmp::Ordering::Greater => anstream::println!(
             "pmpx {latest} is available {}",
             style::paint(style::DIM, format!("(you are on {current})"))
-        );
-    } else {
-        anstream::println!("pmpx {current} is the latest release.");
+        ),
+        std::cmp::Ordering::Equal => {
+            anstream::println!("pmpx {current} is the latest release.")
+        }
+        // A build whose version was already bumped (a checkout, or a release that has not been
+        // published yet) is not "the latest release" -- saying so would be a plain falsehood.
+        std::cmp::Ordering::Less => anstream::println!(
+            "pmpx {current} is newer than the newest release {}",
+            style::paint(style::DIM, format!("(v{latest})"))
+        ),
     }
 
     if kind == InstallKind::Cargo {

@@ -69,9 +69,44 @@ impl Ord for Version {
                 // older than `0.2.0`.
                 (Some(_), None) => Ordering::Less,
                 (None, Some(_)) => Ordering::Greater,
-                (Some(a), Some(b)) => a.cmp(b),
+                (Some(a), Some(b)) => compare_prerelease(a, b),
                 (None, None) => Ordering::Equal,
             })
+    }
+}
+
+/// Compare two pre-release strings the way semver does: identifier by identifier.
+///
+/// Plain string comparison gets this wrong in a way that matters -- `rc.10` sorts *below* `rc.2`,
+/// because the text `1` is less than `2` -- and `--check` would then offer an upgrade that is
+/// actually a downgrade.
+fn compare_prerelease(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let mut left = a.split('.');
+    let mut right = b.split('.');
+
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return Ordering::Equal,
+            // Fewer identifiers, with everything before them equal, is the lower version:
+            // `1.0.0-rc` < `1.0.0-rc.1`.
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) => {
+                let ordering = match (x.parse::<u64>(), y.parse::<u64>()) {
+                    (Ok(nx), Ok(ny)) => nx.cmp(&ny),
+                    // Numeric identifiers sort below alphanumeric ones.
+                    (Ok(_), Err(_)) => Ordering::Less,
+                    (Err(_), Ok(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => x.cmp(y),
+                };
+
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+        }
     }
 }
 
@@ -142,5 +177,21 @@ mod tests {
         assert!(v("0.2.0-rc.1") < v("0.2.0"));
         assert!(v("0.2.0-rc.1") > v("0.1.9"));
         assert_eq!(v("0.2.0-rc.1").to_string(), "0.2.0-rc.1");
+    }
+
+    /// Pre-release identifiers compare one by one, not as text: `rc.10` is *after* `rc.2`, so
+    /// `--check` must not offer it as an upgrade to someone already on `rc.10`.
+    #[test]
+    fn prerelease_identifiers_compare_numerically() {
+        let v = |s: &str| Version::parse(s).unwrap();
+
+        assert!(v("0.2.0-rc.2") < v("0.2.0-rc.10"));
+        assert!(v("0.2.0-rc.9") < v("0.2.0-rc.10"));
+        assert!(v("0.2.0-alpha") < v("0.2.0-beta"));
+        // Numeric identifiers sort below alphanumeric ones.
+        assert!(v("0.2.0-1") < v("0.2.0-alpha"));
+        // Fewer identifiers is the lower version when the rest match.
+        assert!(v("0.2.0-rc") < v("0.2.0-rc.1"));
+        assert_eq!(v("0.2.0-rc.1"), v("0.2.0-rc.1"));
     }
 }
