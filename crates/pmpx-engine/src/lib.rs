@@ -61,7 +61,8 @@ pub use session::{Options, Session};
 /// Behind a feature, and **off by default**, because it is the one part of this crate that reaches for
 /// the network and the user's disk: an embedder that only runs commands someone else installed should
 /// not pay for any of it. `crate-plugin-kit` -- and through it `ureq`, `rustls` and `ring` -- appears in
-/// the store module and the session that owns it, and nowhere else in the workspace.
+/// the store module and the session that owns it. Nothing in the binary mentions it -- only that
+/// binary's own tests do, through a dev-dependency, to find the cdylib they build.
 #[cfg(feature = "store")]
 pub mod store;
 

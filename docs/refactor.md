@@ -350,7 +350,7 @@ impl Engine {
 | 1 | `config set` 写前按类型校验 | **已完成**（`b349f23`）：写入前用 `GlobalConfig` 反序列化整份文档，失败即 `Usage` + "Nothing was written"；三个端到端测试（坏值被拒且文件未创建、好值写回读一致、未知键仍允许） |
 | 2 | `-C` 不再引入 Windows verbatim 路径 | **已完成**（`cf55717`）：改用 `discovery::normalize`（`canonicalize` 与 `std::path::absolute` 在 Windows 上都会给出 `\\?\…`，而那条路径会进入交给插件的上下文）；`normalize` 提为 `pub(crate)` 作为引擎唯一的路径归一 |
 | — | CI 从不编译 store 门控测试 | **已完成**（`db01982`）：工作区默认特性不含 `store`，因此 `pmpx-engine` 的 store 测试在 CI 里从不运行；现在多一步 `cargo test -p pmpx-engine --features store --locked`。这也是第 2 条第一次提交时带着失败断言溜过去的原因 |
-| 3 | CLI 仍直接命名 kit 类型做商店操作 | 待做，计划见下 |
+| 3 | CLI 仍直接命名 kit 类型做商店操作 | **已完成**：引擎新增 `Session` 的商店方法（`install`/`uninstall`/`update`/`search`/`view`/`install_from_path`/`manifest_name`/`normalize_crate_name`）与 `store::vet_checkout` + `VetReport`，CLI 迁移后 `src/` 里 kit 出现次数为 0，`session.kit` 收为 `pub(crate)`；`self update` 的 target triple 改由 `crates/pmpx/build.rs` 自己注入（`PMPX_TARGET`），GitHub URL 解析自持 8 行 |
 | 4 | `InstalledPlugin` 复制 `PluginInfo` 六字段并丢掉 `extra` | **已完成**：现在是 `{ info: PluginInfo, family, strong, weak, wanted }`，`name`/`crate_name`/`version`/`abi`/`dir` 走访问器，`extra` 不再被丢掉 |
 
 **#4（先做，定类型形状）**：`InstalledPlugin` 改为组合——
