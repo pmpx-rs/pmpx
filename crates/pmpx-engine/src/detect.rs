@@ -42,8 +42,8 @@ pub fn candidates(set: &PluginSet) -> Vec<Candidate> {
     set.plugins
         .iter()
         .map(|p| Candidate {
-            crate_name: p.crate_name.clone(),
-            name: p.name.clone(),
+            crate_name: p.crate_name().to_string(),
+            name: p.name().to_string(),
             family: p
                 .family
                 .as_ref()

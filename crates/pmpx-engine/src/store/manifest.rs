@@ -17,12 +17,7 @@ pub(super) fn read_one(info: &PluginInfo) -> InstalledPlugin {
 
     InstalledPlugin {
         info: info.clone(),
-        name: info.name.clone(),
-        crate_name: info.crate_name.clone(),
-        version: info.version.clone(),
         family: info.family.clone().map(Family::new),
-        abi: info.abi,
-        dir: info.dir.clone(),
         strong,
         weak,
         wanted: wanted_files(info),
@@ -115,9 +110,9 @@ files = ["toy.json"]
             "a non-string element is skipped rather than fatal"
         );
         assert_eq!(plugin.wanted, vec!["toy.json".to_string()]);
-        assert_eq!(plugin.name, "toy");
-        assert_eq!(plugin.crate_name, "pmpx-plugin-toy");
-        assert_eq!(plugin.abi, Some(3));
+        assert_eq!(plugin.name(), "toy");
+        assert_eq!(plugin.crate_name(), "pmpx-plugin-toy");
+        assert_eq!(plugin.abi(), Some(3));
         assert_eq!(plugin.family, Some(pmpx_plugin::Family::NODE));
     }
 

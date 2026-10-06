@@ -89,14 +89,14 @@ pub(super) fn print_plugin_row(p: &InstalledPlugin) {
     match p.problem() {
         None => anstream::println!(
             "{} v{} {:<28} {}",
-            style::padded(style::PM, 10, &p.name),
-            style::padded(style::DIM, 10, &p.version),
-            p.crate_name,
-            style::paint(style::DIM, p.dir.display())
+            style::padded(style::PM, 10, p.name()),
+            style::padded(style::DIM, 10, p.version()),
+            p.crate_name(),
+            style::paint(style::DIM, p.dir().display())
         ),
         Some(why) => anstream::println!(
             "{} ⚠ {}",
-            style::padded(style::PM, 10, &p.name),
+            style::padded(style::PM, 10, p.name()),
             style::paint(style::DIM, why)
         ),
     }

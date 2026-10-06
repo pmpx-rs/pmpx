@@ -1,5 +1,6 @@
 //! Tests for reading manifests and for the installed-plugin set those manifests add up to.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use super::*;
@@ -62,11 +63,11 @@ fn reads_names_family_and_detect_patterns() {
 
     assert_eq!(set.plugins.len(), 1);
     let p = &set.plugins[0];
-    assert_eq!(p.name, "pnpm");
-    assert_eq!(p.crate_name, "pmpx-plugin-pnpm");
-    assert_eq!(p.version, "0.1.0");
+    assert_eq!(p.name(), "pnpm");
+    assert_eq!(p.crate_name(), "pmpx-plugin-pnpm");
+    assert_eq!(p.version(), "0.1.0");
     assert_eq!(p.family.as_ref().map(Family::as_str), Some("node"));
-    assert_eq!(p.abi, Some(1));
+    assert_eq!(p.abi(), Some(1));
     assert_eq!(p.strong, vec!["pnpm-lock.yaml", "pnpm-workspace.yaml"]);
     assert_eq!(p.weak, vec!["package.json"]);
     assert!(p.is_usable());
@@ -77,7 +78,7 @@ fn results_are_sorted_by_crate_name() {
     let (_t, kit, _) = store(&[("pmpx-plugin-pnpm", PNPM), ("pmpx-plugin-cargo", CARGO)]);
     let set = PluginSet::load(&kit).unwrap();
 
-    let names: Vec<_> = set.plugins.iter().map(|p| p.crate_name.as_str()).collect();
+    let names: Vec<_> = set.plugins.iter().map(|p| p.crate_name()).collect();
     assert_eq!(names, vec!["pmpx-plugin-cargo", "pmpx-plugin-pnpm"]);
 }
 
@@ -203,12 +204,12 @@ fn by_name_and_by_crate_name_find_the_same_plugin() {
     let set = PluginSet::load(&kit).unwrap();
 
     assert_eq!(
-        set.by_name("pnpm").map(|p| &p.crate_name),
-        Some(&"pmpx-plugin-pnpm".to_string())
+        set.by_name("pnpm").map(|p| p.crate_name()),
+        Some("pmpx-plugin-pnpm")
     );
     assert_eq!(
-        set.by_crate_name("pmpx-plugin-pnpm").map(|p| &p.name),
-        Some(&"pnpm".to_string())
+        set.by_crate_name("pmpx-plugin-pnpm").map(|p| p.name()),
+        Some("pnpm")
     );
     assert!(set.by_name("nope").is_none());
 }

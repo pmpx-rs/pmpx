@@ -235,7 +235,11 @@ impl Session {
             );
         }
 
-        let installed: Vec<String> = self.plugins.usable().map(|p| p.name.clone()).collect();
+        let installed: Vec<String> = self
+            .plugins
+            .usable()
+            .map(|p| p.name().to_string())
+            .collect();
         if installed.is_empty() {
             msg.push_str(
                 "\nNo plugins are installed. pmpx decides the project type from the marker files \
@@ -330,8 +334,8 @@ impl Session {
             name: "backend.load",
             micros: started.elapsed().as_micros(),
             detail: match &loaded {
-                Ok(_) => plugin.crate_name.clone(),
-                Err(error) => format!("{} FAILED: {error}", plugin.crate_name),
+                Ok(_) => plugin.crate_name().to_string(),
+                Err(error) => format!("{} FAILED: {error}", plugin.crate_name()),
             },
         });
 
@@ -350,21 +354,21 @@ impl Session {
         events: &mut dyn FnMut(Event),
     ) -> Result<crate::Backend> {
         let identity = crate::PluginIdentity {
-            name: plugin.name.clone(),
-            crate_name: plugin.crate_name.clone(),
-            dir: plugin.dir.clone(),
+            name: plugin.name().to_string(),
+            crate_name: plugin.crate_name().to_string(),
+            dir: plugin.dir().to_path_buf(),
             wanted: plugin.wanted.clone(),
-            declared_abi: plugin.abi,
+            declared_abi: plugin.abi(),
         };
 
         // The library file lives in the plugin's own directory, named after its crate with the platform's
         // conventions -- `find_library` knows the last part of that.
-        let stem = plugin.crate_name.replace('-', "_");
-        let library = crate_plugin_kit::find_library(&plugin.dir, &stem).map_err(|error| {
+        let stem = plugin.crate_name().replace('-', "_");
+        let library = crate_plugin_kit::find_library(plugin.dir(), &stem).map_err(|error| {
             EngineError::Setup(format!(
                 "cannot find the plugin library for {} in {}: {error}",
-                plugin.crate_name,
-                plugin.dir.display()
+                plugin.crate_name(),
+                plugin.dir().display()
             ))
         })?;
 

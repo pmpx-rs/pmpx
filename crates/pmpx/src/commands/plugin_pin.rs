@@ -28,7 +28,7 @@ pub(super) fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
             session
                 .plugins
                 .usable()
-                .map(|p| p.name.clone())
+                .map(|p| p.name())
                 .collect::<Vec<_>>()
                 .join(", ")
         )));
@@ -46,14 +46,14 @@ pub(super) fn plugin_set(args: &Cli, name: &str) -> crate::error::Result<u8> {
         .unwrap_or_default();
     edit_project_config(&path, current, |cfg| {
         cfg.plugin
-            .insert(family.as_str().to_string(), plugin.name.clone());
+            .insert(family.as_str().to_string(), plugin.name().to_string());
     })
     .map_err(PmpxError::Other)?;
 
     anstream::println!(
         "Pinned {} = \"{}\" in {}",
         family.as_str(),
-        style::paint(style::PM, &plugin.name),
+        style::paint(style::PM, &plugin.name()),
         style::paint(style::DIM, path.display())
     );
     Ok(EXIT_OK)

@@ -351,7 +351,7 @@ impl Engine {
 | 2 | `-C` 不再引入 Windows verbatim 路径 | **已完成**（`cf55717`）：改用 `discovery::normalize`（`canonicalize` 与 `std::path::absolute` 在 Windows 上都会给出 `\\?\…`，而那条路径会进入交给插件的上下文）；`normalize` 提为 `pub(crate)` 作为引擎唯一的路径归一 |
 | — | CI 从不编译 store 门控测试 | **已完成**（`db01982`）：工作区默认特性不含 `store`，因此 `pmpx-engine` 的 store 测试在 CI 里从不运行；现在多一步 `cargo test -p pmpx-engine --features store --locked`。这也是第 2 条第一次提交时带着失败断言溜过去的原因 |
 | 3 | CLI 仍直接命名 kit 类型做商店操作 | 待做，计划见下 |
-| 4 | `InstalledPlugin` 复制 `PluginInfo` 六字段并丢掉 `extra` | 待做，计划见下 |
+| 4 | `InstalledPlugin` 复制 `PluginInfo` 六字段并丢掉 `extra` | **已完成**：现在是 `{ info: PluginInfo, family, strong, weak, wanted }`，`name`/`crate_name`/`version`/`abi`/`dir` 走访问器，`extra` 不再被丢掉 |
 
 **#4（先做，定类型形状）**：`InstalledPlugin` 改为组合——
 ```rust

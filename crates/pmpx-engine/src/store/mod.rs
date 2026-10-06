@@ -8,7 +8,7 @@
 //! This file is the installed set and what one entry means; [`manifest`](self) is the one place that
 //! turns an entry's manifest into those fields.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use crate_plugin_kit::{CratePluginKit, PluginInfo};
@@ -21,40 +21,20 @@ use self::manifest::read_one;
 
 /// One installed plugin, as this host sees it.
 ///
-/// # Why both `info` and the fields below
+/// The kit's [`PluginInfo`] is kept whole rather than copied field by field: it is what the manifest
+/// said, host sections (`[detect]`, `[context]`, and anything a later version adds) included — so a new
+/// section needs a field here only when this host actually reads it. `name` and the rest are read
+/// through [`InstalledPlugin::name`] and its neighbours.
 ///
-/// This is the first half of a two-step change: [`PluginInfo`] is the whole of what the kit read from
-/// the manifest -- host sections (`[detect]`, `[context]`, and anything a later version adds) included --
-/// and it is kept here so nothing is thrown away. The fields below are still the copies this host reads,
-/// because changing every reader of them is the second half; when that lands, they go and
-/// [`InstalledPlugin::name`] and friends take their place.
-///
-/// No `PartialEq`: the kit's [`PluginInfo`] has none.
+/// No `PartialEq`: the kit's [`PluginInfo`] has none, and comparing two plugins is not something this
+/// host does.
 #[derive(Debug, Clone)]
 pub struct InstalledPlugin {
     /// What the kit read from the manifest, in full.
     pub info: PluginInfo,
 
-    /// The plugin's self-reported name (the manifest's `plugin.name`, e.g. `pnpm`).
-    ///
-    /// The manifest is the authority for this name; after loading, `PackageManager::name()` must
-    /// equal it, otherwise loading is refused.
-    pub name: String,
-
-    /// Full crate name (`pmpx-plugin-pnpm`).
-    pub crate_name: String,
-
-    /// Version.
-    pub version: String,
-
     /// Family. `None` means the manifest did not declare one — see [`InstalledPlugin::problem`].
     pub family: Option<Family>,
-
-    /// The ABI version declared by the manifest.
-    pub abi: Option<u32>,
-
-    /// Install directory.
-    pub dir: PathBuf,
 
     /// Strong evidence (100 points each): proves this backend has really been used.
     pub strong: Vec<String>,
@@ -69,6 +49,31 @@ pub struct InstalledPlugin {
 }
 
 impl InstalledPlugin {
+    /// The plugin's self-reported name.
+    pub fn name(&self) -> &str {
+        &self.info.name
+    }
+
+    /// Full crate name (`pmpx-plugin-pnpm`).
+    pub fn crate_name(&self) -> &str {
+        &self.info.crate_name
+    }
+
+    /// Version.
+    pub fn version(&self) -> &str {
+        &self.info.version
+    }
+
+    /// The ABI version the manifest declares. Diagnostics only.
+    pub fn abi(&self) -> Option<u32> {
+        self.info.abi
+    }
+
+    /// Install directory.
+    pub fn dir(&self) -> &std::path::Path {
+        &self.info.dir
+    }
+
     /// Whether this plugin can take part in detection and resolution.
     ///
     /// `plugin ls` shows the reason when it cannot — "installed but not in effect" is the hardest
@@ -123,7 +128,7 @@ impl PluginSet {
         for info in infos {
             plugins.push(read_one(&info));
         }
-        plugins.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
+        plugins.sort_by(|a, b| a.crate_name().cmp(b.crate_name()));
 
         let mut detect_names: Vec<String> = plugins
             .iter()
@@ -147,12 +152,12 @@ impl PluginSet {
 
     /// Find by self-reported name. The name comes from the manifest, matching `pmpx -p <name>`.
     pub fn by_name(&self, name: &str) -> Option<&InstalledPlugin> {
-        self.plugins.iter().find(|p| p.name == name)
+        self.plugins.iter().find(|p| p.name() == name)
     }
 
     /// Find by crate name.
     pub fn by_crate_name(&self, crate_name: &str) -> Option<&InstalledPlugin> {
-        self.plugins.iter().find(|p| p.crate_name == crate_name)
+        self.plugins.iter().find(|p| p.crate_name() == crate_name)
     }
 
     /// Every detect file name declared by any plugin, deduplicated and sorted.

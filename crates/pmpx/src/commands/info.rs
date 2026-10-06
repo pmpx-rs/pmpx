@@ -122,13 +122,13 @@ pub(super) fn show_info(args: &Cli) -> crate::error::Result<u8> {
         match p.problem() {
             None => anstream::println!(
                 "  {} {:<8} v{}",
-                style::padded(style::PM, 10, &p.name),
+                style::padded(style::PM, 10, p.name()),
                 p.family.as_ref().map(Family::as_str).unwrap_or("?"),
-                style::paint(style::DIM, &p.version)
+                style::paint(style::DIM, &p.version())
             ),
             Some(why) => anstream::println!(
                 "  {} ⚠ {}",
-                style::padded(style::PM, 10, &p.name),
+                style::padded(style::PM, 10, p.name()),
                 style::paint(style::DIM, why)
             ),
         }

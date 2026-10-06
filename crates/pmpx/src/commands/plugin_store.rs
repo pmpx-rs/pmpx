@@ -251,7 +251,11 @@ pub(super) fn plugin_update(
 
     // No names = update all of them
     let targets: Vec<String> = if names.is_empty() {
-        session.plugins.usable().map(|p| p.name.clone()).collect()
+        session
+            .plugins
+            .usable()
+            .map(|p| p.name().to_string())
+            .collect()
     } else {
         names.to_vec()
     };
@@ -314,13 +318,13 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
         anstream::println!(
             "  {} {}",
             style::label(15, "reported name"),
-            style::paint(style::PM, &p.name)
+            style::paint(style::PM, &p.name())
         );
-        anstream::println!("  {} {}", style::label(15, "crate"), p.crate_name);
+        anstream::println!("  {} {}", style::label(15, "crate"), p.crate_name());
         anstream::println!(
             "  {} {}",
             style::label(15, "version"),
-            style::paint(style::DIM, &p.version)
+            style::paint(style::DIM, &p.version())
         );
         anstream::println!(
             "  {} {}",
@@ -333,14 +337,14 @@ pub(super) fn plugin_info(args: &Cli, name: &str) -> crate::error::Result<u8> {
         anstream::println!(
             "  {} {}",
             style::label(15, "ABI"),
-            p.abi
+            p.abi()
                 .map(|a| a.to_string())
                 .unwrap_or_else(|| "(not declared)".into())
         );
         anstream::println!(
             "  {} {}",
             style::label(15, "directory"),
-            style::paint(style::DIM, p.dir.display())
+            style::paint(style::DIM, p.dir().display())
         );
         anstream::println!(
             "  {} {}",
