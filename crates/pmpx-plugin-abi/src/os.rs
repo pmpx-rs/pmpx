@@ -9,8 +9,14 @@
 //! UTF-8 degrades to U+FFFD -- that is the platform's boundary, not a choice made here.
 
 use std::ffi::{OsStr, OsString};
-use std::string::String;
 use std::vec::Vec;
+
+// `String` is in the prelude of a `std` crate, not of this `no_std` one, and only the `not(unix)` path
+// below needs it -- so the import carries the same gate as its use. Without the gate it is an unused
+// import on Unix, which this workspace's `-D warnings` turns into a build failure that Windows, where
+// the other arm compiles, can never show.
+#[cfg(not(unix))]
+use std::string::String;
 
 /// Turn raw bytes back into an `OsString`.
 ///
