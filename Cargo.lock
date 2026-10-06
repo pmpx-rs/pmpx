@@ -165,9 +165,9 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "crate-plugin-kit"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e239380a8ed547f58a6dda5f90af237a12d52806fb98c323808af7eeb7e6812"
+checksum = "cf23df692052899f76615efff4d69aacaaa3a7f4895a4e84d33f2f3c240cc778"
 dependencies = [
  "anyhow",
  "directories",
