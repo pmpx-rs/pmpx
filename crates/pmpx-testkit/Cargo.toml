@@ -1,0 +1,27 @@
+[package]
+name = "pmpx-testkit"
+description = "Test helpers for plugin authors: build the context a host would hand over, and capture what the plugin says."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["pmpx", "plugin", "testing"]
+categories = ["development-tools"]
+
+# The contract, for the types a plugin's own tests name; the decision, so a fixture directory can be run
+# through the *real* detection instead of a hand-written expectation; the configuration, for the pins a
+# project would carry.
+[dependencies]
+pmpx-plugin.workspace = true
+pmpx-detect.workspace = true
+pmpx-project.workspace = true
+# The fixture writes a real directory: the detection is the real one, so the project has to be too.
+tempfile = "3"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"

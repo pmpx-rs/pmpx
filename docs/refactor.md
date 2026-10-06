@@ -326,7 +326,12 @@ impl Engine {
 - **第 4 步的 `pmpx-detect` 已完成**：`STRONG_SCORE`/`WEAK_SCORE`/`PIN_FLOOR`、计分、家族与插件的两层层级、每一种失败原因都搬了进去，宿主只剩一个适配器（`InstalledPlugin` → `Candidate`、目录 → `Presence`、两层配置 → pins 与排序表、`Reason` → 契约的 `SelectionReason`）。决策现在吃数据：`Presence` 只有一个方法，"这个文件在不在"，测试用一个名字集合回答，于是整套排序/pin/同分/失败测试**不需要文件系统**；另有一个集成测试连"问了哪些文件"都断言成声明的那些标记名。零依赖，并已加进 CI 的零依赖门。
 - **第 4 步的 `pmpx-project` 也已完成，`[scripts]` 同时落地**：`atomic_write`、`paths`（含两个环境变量覆盖）、`.pmpx.toml` 的分层合并、全局配置（含默认排序表）都搬进 crate 并保留各自的测试；宿主只剩 `pub use`。`[scripts]` 按 §5 的决定实现成**宿主侧别名**：`pmpx run <名字>` 先查合并后的表，命中就直接执行（不需要任何插件，也不需要检测），`--` 之后的参数追加给它，未命中才走插件路由。字符串形式的分词规则：空白分隔、`"`/`'` 成组、未闭合的引号取到行尾、**没有 shell**（`$VAR`、`&&`、管道都是普通字符，这是唯一能在三个平台一致的行为）。CLI 套件里加了 5 个端到端测试，其中一个专门验证"项目自己定义的名字不需要插件"，另一个验证"没有定义的名字照旧交给插件"。
 - **第 5 步的执行半边已落地**：`pmpx-engine` 现在拥有"把答案变成进程"的全部机制——`resolve`（PATH/PATHEXT、`.cmd`/`.ps1` 的种类判定）、`command_for`（按种类选解释器、构建 `cmd.exe` 行）、`run`（继承 stdio、等待、把退出状态翻译成退出码）、以及 `EngineError`（"没有这个程序"与"有但起不来"是两件事）。它自己的 `Plan`/`Event` 类型让它**完全不依赖契约**：`Plan` 就三个字段，`Event` 是 `Resolved` / `Starting` / `Finished` / `Note` / `Error`，于是整条执行路径可以在**没有插件**的情况下测试（新增的 `a_run_reports_what_it_did_in_order` 断言完整事件序列）。宿主剩下 100 行的渲染器：把事件变成 `--debug` 的两条轨迹、"pmpx -> …"的宣告，以及两种提示；退出码翻译（`NotFound` → 3）也在那里。
-- 仍然待做：`pmpx-engine` 的设置/商店/门面半边、`pmpx-testkit`（第 6–7 步）、`hints.rs` 的删除或外置、`pmpx run` 的 argv 边界，以及发布时的 `pmpx-plugin` 版本号 0.2.1 → 0.3.0。
+- **第 5 步（`pmpx-engine` 的设置/商店/门面）已完成**：`Session::open` 吃 `Options`（argv 事实，不依赖 clap），商店（`store` 特性默认关闭）与 walk-up 都在引擎里，`run_verb`/`run_script` 也在；CLI 只剩 `cli.rs` + `commands/*` + `style.rs` + 事件渲染 + `selfupdate`。
+- **`hints.rs` 已删除**，"没检测到"的消息改为列出已安装插件与它们声明的标记文件。
+- **`pmpx run` 的 argv 边界已修**：`--` 分隔符原样交给插件（`args=some-target,--,--release`），插件才分得清"目标自己的参数"与"透传参数"；此前拍平后这个区分不可恢复。
+- **`pmpx-testkit` 已落地**（第 7 步的一半）：两个入口都有——手工构造 `Context`（`context()`）与**真实检测**跑 fixture 目录（`Fixture`，用 `pmpx-detect` 与清单声明的标记），外加一个假宿主 `capture()` 让插件断言自己写的日志行（每个级别一张表，和真实宿主同一套机制）。它自己的测试就按插件作者的用法写。
+- **版本号已到 0.3.0**（工作区统一版本；这次 ABI 是破版，与 `ABI_VERSION` 1→2 时一样，已发布的插件需要重编译）。
+- 仍然待做：`pmpx plugin new` / `pmpx plugin test`（第 7 步的另一半：脚手架与"在插件源码目录里跑它自己的测试"），以及 `--explain` / `--json`（第 6 步里唯一还没做的两项）。
 
 回滚：第 3–7 步都是追加式搬迁，任何一步都可以在不碰 ABI 的前提下回退。第 2 步不可逆——它之后所有已发布插件都必须重编译，正如 `ABI_VERSION` 1 → 2 已经要求过一次的那样。
 

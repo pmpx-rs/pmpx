@@ -236,6 +236,23 @@ fn a_pinned_plugin_is_told_it_was_pinned() {
     assert!(context_line.contains(".pmpx.toml"), "{context_line}");
 }
 
+/// The `--` boundary reaches the plugin: the target's own arguments and the ones to pass through are
+/// told apart by the person's own command line, and nothing here is allowed to flatten them.
+#[test]
+fn the_passthrough_separator_reaches_the_plugin() {
+    let (sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+
+    let out = sb.run(&["run", "some-target", "--", "--release"]);
+
+    assert!(out.status.success(), "{}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(
+        stdout.contains("args=some-target,--,--release"),
+        "the separator has to survive into the argument list: {stdout}"
+    );
+}
+
 /// `-p` overrides everything, including a pin, and the plugin is told that too.
 #[test]
 fn a_plugin_named_with_dash_p_is_told_it_was_explicit() {

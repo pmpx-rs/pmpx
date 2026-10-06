@@ -69,9 +69,16 @@ pub fn dispatch(args: &Cli) -> crate::error::Result<u8> {
                 }
             }
 
-            // Otherwise the target and what follows `--` go to the plugin together; how to arrange them
-            // is up to the plugin (cargo, for example, uses `cargo run -- ...`).
-            let argv: Vec<OsString> = target.iter().cloned().chain(rest.iter().cloned()).collect();
+            // Otherwise the target and what follows `--` go to the plugin, **with the separator still in
+            // place**: a plugin has to be able to tell the target's own arguments from arguments to pass
+            // through (`cargo run -- --release`), and only the person's own command line carries that
+            // distinction. Flattening the two made the boundary unrecoverable.
+            let mut argv: Vec<OsString> = target.iter().cloned().collect();
+            if !rest.is_empty() {
+                argv.push(OsString::from("--"));
+                argv.extend(rest.iter().cloned());
+            }
+
             app::run_verb(&session, pmpx_plugin::Verb::Run, &argv, false)
         }
 
