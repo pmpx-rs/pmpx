@@ -18,7 +18,7 @@ fn plugin_ls_says_how_to_start() {
 
 #[test]
 fn plugin_set_writes_a_pmpx_toml_and_it_takes_effect() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock").file("fakepm.json");
 
     sb.ok(&["plugin", "set", "fakepm"]);
@@ -40,7 +40,7 @@ fn plugin_set_writes_a_pmpx_toml_and_it_takes_effect() {
 /// directories again, so this pins that the two agree.
 #[test]
 fn plugin_set_writes_the_nearest_existing_config() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
 
     // One layer above the project root, and one inside it.
     std::fs::write(sb.project.join(".pmpx.toml"), "[plugin]\n").unwrap();
@@ -74,7 +74,7 @@ fn plugin_set_writes_the_nearest_existing_config() {
 
 #[test]
 fn plugin_unset_removes_it_and_cleans_up_the_file() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     sb.ok(&["plugin", "set", "fakepm"]);
@@ -90,7 +90,7 @@ fn plugin_unset_removes_it_and_cleans_up_the_file() {
 
 #[test]
 fn unset_without_a_family_needs_yes_when_there_are_several() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
     // Write two pins by hand (fakepm only belongs to faketest, but a pin does not require the
     // plugin to exist)
@@ -149,7 +149,7 @@ fn a_manifest_without_family_is_listed_with_its_problem() {
 /// `-p` naming a plugin that is not installed -> exit code 3 and a list of the options.
 #[test]
 fn an_unknown_plugin_flag_lists_what_is_installed() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     let out = sb.run(&["-p", "nope", "build"]);
@@ -165,7 +165,7 @@ fn an_unknown_plugin_flag_lists_what_is_installed() {
 /// `-p` has to beat `.pmpx.toml`.
 #[test]
 fn the_plugin_flag_beats_the_project_config() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
     // Pin to a plugin that does not exist -- the normal path errors out because of it
     std::fs::write(
@@ -190,7 +190,7 @@ fn the_plugin_flag_beats_the_project_config() {
 /// A mismatched ABI version -> refuse to load, and state both versions.
 #[test]
 fn an_abi_mismatch_is_refused_with_both_versions() {
-    let (_build, sb, lib) = sandbox_with_plugin();
+    let (sb, lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     // The manifest's abi is only for display; the real check happens after loading, by

@@ -19,6 +19,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate_plugin_kit::{CratePluginKit, KitConfig};
@@ -44,56 +45,66 @@ strong = [".yarnrc.yml"]
 weak   = ["package.json"]
 "#;
 
-/// Compile the fixture and return (a temp dir kept alive, the cdylib path).
+/// Compile the fixture once per test binary and return the cdylib path.
 ///
 /// When `PMPX_TEST_PREBUILT_LIB` is set, use it directly and skip compiling -- that is the opening
 /// left for CI's cross-toolchain job: build the fixture with an older toolchain first, then run the
 /// tests with the current one, so the host and the plugin come from two different rustcs.
 ///
 /// When it is not set, compile in place (do not copy it out, because the fixture's `Cargo.toml`
-/// has a path dependency pointing at `../../..` that would break if copied elsewhere), with the
-/// target directory pointed at a temp dir so no `target/` is left in the repository.
-fn build_fixture() -> (tempfile::TempDir, PathBuf) {
-    if let Ok(prebuilt) = std::env::var("PMPX_TEST_PREBUILT_LIB") {
-        let path = PathBuf::from(&prebuilt);
-        assert!(
-            path.is_file(),
-            "the file PMPX_TEST_PREBUILT_LIB points at does not exist: {prebuilt}"
-        );
-        println!(
-            "using the prebuilt plugin artifact (cross-toolchain mode): {}",
-            path.display()
-        );
-        return (
-            tempfile::tempdir().expect("should be able to create a temp dir"),
-            path,
-        );
-    }
+/// has a path dependency pointing at `../../..` that would break if copied elsewhere). The output
+/// goes under the workspace's own `target`, which is inside the ignored area anyway: compiling the
+/// fixture once per test was most of this suite's runtime.
+fn build_fixture() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
 
-    let tmp = tempfile::tempdir().expect("should be able to create a temp dir");
+    BUILT
+        .get_or_init(|| {
+            if let Ok(prebuilt) = std::env::var("PMPX_TEST_PREBUILT_LIB") {
+                let path = PathBuf::from(&prebuilt);
+                assert!(
+                    path.is_file(),
+                    "the file PMPX_TEST_PREBUILT_LIB points at does not exist: {prebuilt}"
+                );
+                println!(
+                    "using the prebuilt plugin artifact (cross-toolchain mode): {}",
+                    path.display()
+                );
+                return path;
+            }
 
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("toy-plugin");
+            let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("toy-plugin");
+            let target_dir = workspace_target_dir().join("fixture-toy-plugin");
 
-    let target_dir = tmp.path().join("target");
+            // Called `cargo` directly: we are running inside cargo test right now, so it is
+            // definitely on PATH.
+            let status = Command::new("cargo")
+                .args(["build", "--release", "--manifest-path"])
+                .arg(fixture.join("Cargo.toml"))
+                .arg("--target-dir")
+                .arg(&target_dir)
+                .status()
+                .expect("should be able to start cargo");
+            assert!(status.success(), "the fixture should compile");
 
-    // Called `cargo` directly: we are running inside cargo test right now, so it is definitely on
-    // PATH.
-    let status = Command::new("cargo")
-        .args(["build", "--release", "--manifest-path"])
-        .arg(fixture.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(&target_dir)
-        .status()
-        .expect("should be able to start cargo");
-    assert!(status.success(), "the fixture should compile");
+            crate_plugin_kit::find_library(&target_dir.join("release"), "pmpx_plugin_toy")
+                .expect("the fixture's cdylib should be among the artifacts")
+        })
+        .clone()
+}
 
-    let lib = crate_plugin_kit::find_library(&target_dir.join("release"), "pmpx_plugin_toy")
-        .expect("the fixture's cdylib should be among the artifacts");
-
-    (tmp, lib)
+/// The workspace `target` directory this test binary was built into
+/// (`<target>/<profile>/deps/<test binary>`, so three levels up from the executable).
+fn workspace_target_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .and_then(|deps| deps.parent().map(Path::to_path_buf))
+        .and_then(|profile| profile.parent().map(Path::to_path_buf))
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 /// Lay out a plugin library directory and return (a temp dir kept alive, the kit).
@@ -201,7 +212,7 @@ fn call(
 
 #[test]
 fn loads_a_real_cdylib_and_drives_the_vtable() {
-    let (_build_tmp, lib) = build_fixture();
+    let lib = build_fixture();
     let (_store_tmp, kit) = store_with_fixture(&lib);
 
     // list: reads the manifest only, no dlopen
@@ -262,7 +273,7 @@ fn loads_a_real_cdylib_and_drives_the_vtable() {
 
 #[test]
 fn unsupported_verb_keeps_its_code_across_the_boundary() {
-    let (_build_tmp, lib) = build_fixture();
+    let lib = build_fixture();
     let (_store_tmp, kit) = store_with_fixture(&lib);
 
     let loaded = kit.load("toy").expect("should be able to load");
@@ -281,7 +292,7 @@ fn unsupported_verb_keeps_its_code_across_the_boundary() {
 /// "this panic must be caught by guard" in the test output is expected.
 #[test]
 fn a_panicking_plugin_does_not_take_the_host_down() {
-    let (_build_tmp, lib) = build_fixture();
+    let lib = build_fixture();
     let (_store_tmp, kit) = store_with_fixture(&lib);
 
     let loaded = kit.load("toy").expect("should be able to load");

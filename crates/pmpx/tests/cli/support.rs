@@ -3,9 +3,25 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 /// The path of the pmpx binary. cargo provides this environment variable for bin targets.
 pub(crate) const PMPX: &str = env!("CARGO_BIN_EXE_pmpx");
+
+/// The workspace `target` directory this test binary was built into.
+///
+/// The layout is `<target>/<profile>/deps/<test binary>`, so three levels up from the running
+/// executable. Everything a test compiles for itself goes under here rather than into a temporary
+/// directory of its own: it is the same fixture crate every time, and rebuilding it once per test
+/// was most of the suite's runtime.
+fn workspace_target_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .and_then(|deps| deps.parent().map(Path::to_path_buf))
+        .and_then(|profile| profile.parent().map(Path::to_path_buf))
+        .unwrap_or_else(std::env::temp_dir)
+}
 
 /// A sandbox: a pmpx config directory, a plugin directory, and a "project" directory.
 pub(crate) struct Sandbox {
@@ -110,28 +126,34 @@ pub(crate) fn stderr_of(out: &Output) -> String {
 // Compiling the real plugin
 // ---------------------------------------------------------------------------
 
-/// Build the fake plugin and return the cdylib path.
-pub(crate) fn build_fake_plugin() -> (tempfile::TempDir, PathBuf) {
-    let tmp = tempfile::tempdir().unwrap();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("fake-plugin");
-    let target_dir = tmp.path().join("target");
+/// Build the fake plugin once per test binary and return the cdylib path.
+///
+/// The build output lives under the workspace's own `target`, so a second run of the suite only
+/// has to relink what changed instead of compiling the fixture from scratch for every test.
+pub(crate) fn build_fake_plugin() -> PathBuf {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
 
-    let status = Command::new("cargo")
-        .args(["build", "--release", "--manifest-path"])
-        .arg(fixture.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(&target_dir)
-        .status()
-        .expect("should be able to start cargo");
-    assert!(status.success(), "the fake plugin should compile");
+    BUILT
+        .get_or_init(|| {
+            let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests")
+                .join("fixtures")
+                .join("fake-plugin");
+            let target_dir = workspace_target_dir().join("fixture-fake-plugin");
 
-    let lib = crate_plugin_kit::find_library(&target_dir.join("release"), "pmpx_plugin_fakepm")
-        .expect("should find the fake plugin's cdylib");
+            let status = Command::new("cargo")
+                .args(["build", "--release", "--manifest-path"])
+                .arg(fixture.join("Cargo.toml"))
+                .arg("--target-dir")
+                .arg(&target_dir)
+                .status()
+                .expect("should be able to start cargo");
+            assert!(status.success(), "the fake plugin should compile");
 
-    (tmp, lib)
+            crate_plugin_kit::find_library(&target_dir.join("release"), "pmpx_plugin_fakepm")
+                .expect("should find the fake plugin's cdylib")
+        })
+        .clone()
 }
 
 const FAKEPM_MANIFEST: &str = r#"
@@ -147,9 +169,9 @@ weak   = ["fakepm.json"]
 "#;
 
 /// A sandbox with the fake plugin installed.
-pub(crate) fn sandbox_with_plugin() -> (tempfile::TempDir, Sandbox, PathBuf) {
-    let (build_tmp, lib) = build_fake_plugin();
+pub(crate) fn sandbox_with_plugin() -> (Sandbox, PathBuf) {
+    let lib = build_fake_plugin();
     let sb = Sandbox::new();
     sb.install_plugin("pmpx-plugin-fakepm", FAKEPM_MANIFEST, Some(&lib));
-    (build_tmp, sb, lib)
+    (sb, lib)
 }

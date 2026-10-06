@@ -7,7 +7,7 @@ use crate::support::{sandbox_with_plugin, stderr_of, stdout_of, Sandbox, PMPX};
 /// Layered config: a `.pmpx.toml` above the project root has to be visible too.
 #[test]
 fn config_above_the_project_root_is_visible() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
 
     // The project is in project/web/, the pin is written in project/ (above the project root)
     let web = sb.project.join("web");
@@ -84,7 +84,7 @@ fn config_get_on_a_missing_key_is_a_usage_error() {
 /// After setting `walk_up = false`, walk-up really stops.
 #[test]
 fn walk_up_false_stops_the_search() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     // The manifest is in the upper layer, cwd is in the lower one
     let deep = sb.project.join("a").join("b");
     std::fs::create_dir_all(&deep).unwrap();

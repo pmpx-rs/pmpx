@@ -56,7 +56,7 @@ fn exec_still_works_with_zero_plugins() {
 
 #[test]
 fn detects_the_project_and_runs_the_backend_command() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     let out = sb.ok(&["build"]);
@@ -71,7 +71,7 @@ fn detects_the_project_and_runs_the_backend_command() {
 /// The data crossing the boundary is correct -- the part unit tests cannot cover.
 #[test]
 fn the_plugin_receives_root_matched_verb_and_args_across_the_boundary() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
     sb.file("fakepm.json");
 
@@ -113,7 +113,7 @@ fn the_plugin_receives_root_matched_verb_and_args_across_the_boundary() {
 /// Arguments after `--` have to reach the backend verbatim.
 #[test]
 fn args_after_the_double_dash_reach_the_plugin() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     let out = sb.ok(&["test", "--", "--nocapture", "some-filter"]);
@@ -128,7 +128,7 @@ fn args_after_the_double_dash_reach_the_plugin() {
 
 #[test]
 fn a_bare_pmpx_reports_the_selection() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     let out = sb.ok(&[]);
@@ -141,7 +141,7 @@ fn a_bare_pmpx_reports_the_selection() {
 
 #[test]
 fn info_lists_every_candidate_and_score() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     let out = sb.ok(&["info"]);
@@ -164,7 +164,7 @@ fn info_lists_every_candidate_and_score() {
 /// to "it feels slow" is only useful if it says which side the time went to.
 #[test]
 fn debug_traces_every_phase_on_stderr() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     let out = sb.run(&["--debug", "build"]);
@@ -194,7 +194,7 @@ fn debug_traces_every_phase_on_stderr() {
 /// request of the two.
 #[test]
 fn quiet_does_not_turn_the_trace_off() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     let out = sb.run(&["--quiet", "--debug", "build"]);
@@ -216,7 +216,7 @@ fn quiet_does_not_turn_the_trace_off() {
 /// scenario where degrading is allowed.
 #[test]
 fn exec_falls_back_when_the_plugin_says_unsupported() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock"); // the project is recognisable and the plugin is installed
 
     let out = sb.run(&["exec", "cargo", "--version"]);
@@ -235,7 +235,7 @@ fn exec_falls_back_when_the_plugin_says_unsupported() {
 /// The six verbs other than exec keep "unsupported is an error".
 #[test]
 fn other_verbs_do_not_fall_back() {
-    let (_build, sb, _lib) = sandbox_with_plugin();
+    let (sb, _lib) = sandbox_with_plugin();
     sb.file("fakepm.lock");
 
     // The fake plugin panics on remove -> the host must stay alive and report an internal
