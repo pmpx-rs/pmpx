@@ -18,6 +18,7 @@
 | [`ci-unix-unused-import.md`](ci-unix-unused-import.md) | `no_std` crate 里为 `#[cfg(not(unix))]` 分支加的 `use` 没带门控 → Linux/macOS 的 `-D warnings` 失败，而 Windows 通过；含本地用 `--target x86_64-unknown-linux-gnu` 复现的办法 |
 | [`ci-zero-dep-guard.md`](ci-zero-dep-guard.md) | 零依赖门禁把工作区内的兄弟 crate 当成外部依赖（且它此前一直被更早的编译失败挡着没执行）→ 判定改为"不依赖工作区之外的 crate" |
 | [`ci-package-unpublished-dep.md`](ci-package-unpublished-dep.md) | `cargo package` 要求依赖已在 crates.io 索引里，所以发布前只有叶子 crate 能完整打包；`--no-verify` 无效（失败早于验证），改用 `--list` 查文件装配 |
+| [`ci-path-only-dev-dep.md`](ci-path-only-dev-dep.md) | "path 必须有 version"的检查没区分依赖种类，把 dev-dependency 也算上了；给它补版本的代价是发布顺序多一条边，正确修法是限定到 normal/build |
 
 ## 写作约定
 
