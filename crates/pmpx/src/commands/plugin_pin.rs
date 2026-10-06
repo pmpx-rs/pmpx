@@ -1,8 +1,12 @@
 //! `plugin set / unset`: pinning which plugin answers, in the nearest `.pmpx.toml`.
 //!
 //! Writing a pin is a read-modify-write of the nearest `.pmpx.toml`, which is the one project file
-//! pmpx ever writes, and only when asked. Everything the file already carries — other pins, the
-//! `[scripts]` section, keys pmpx does not know — is read back and written out again untouched.
+//! pmpx ever writes, and only when asked. Every **key** the file already carries — other pins, the
+//! `[scripts]` section, keys pmpx does not know — is read back and written out again.
+//!
+//! What it does not keep is the *text*: the file is parsed into a document and serialised again, so
+//! comments and the exact layout are lost, and tables are written in a fixed order. Keys and values
+//! are what survives; a hand-written comment next to a pin does not.
 
 use std::path::{Path, PathBuf};
 

@@ -9,6 +9,35 @@ fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
     p
 }
 
+/// Pinning a plugin rewrites the project file, and that rewrite must not add a section the user
+/// never wrote -- an empty `[scripts]` used to appear next to every pin.
+#[test]
+fn an_empty_scripts_table_is_not_written_back() {
+    let mut cfg = ProjectConfig::default();
+    cfg.plugin.insert("rust".into(), "cargo".into());
+
+    let text = toml::to_string_pretty(&cfg).unwrap();
+
+    assert!(text.contains("[plugin]"), "{text}");
+    assert!(
+        !text.contains("[scripts]"),
+        "nothing asked for a scripts table: {text}"
+    );
+}
+
+/// Unknown keys are still kept: the rewrite is a read-modify-write, not a fresh document.
+#[test]
+fn unknown_keys_survive_a_round_trip() {
+    let cfg: ProjectConfig =
+        toml::from_str("[my.custom]\nx = 1\n\n[plugin]\nrust = \"cargo\"\n").unwrap();
+
+    let text = toml::to_string_pretty(&cfg).unwrap();
+    let again: ProjectConfig = toml::from_str(&text).unwrap();
+
+    assert!(again.extra.get("my").is_some(), "{text}");
+    assert_eq!(again.plugin.get("rust").map(String::as_str), Some("cargo"));
+}
+
 #[test]
 fn missing_global_config_is_all_defaults() {
     let tmp = tempfile::tempdir().unwrap();

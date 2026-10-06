@@ -17,10 +17,15 @@ pub struct ProjectConfig {
     /// `[plugin] <family> = "<name>"`: the key is a **family name**, not a plugin name.
     /// `BTreeMap<String, _>` so that new families brought by third-party plugins can be written
     /// without waiting for a release.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin: BTreeMap<String, String>,
 
     /// `[scripts] name = "run something"`: the semantics are not defined yet; it is only parsed and
     /// kept verbatim — the read-modify-write of `plugin set/unset` must not eat it.
+    ///
+    /// Empty tables are not written back, so pinning something does not add a `[scripts]` line to a
+    /// file that never had one.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub scripts: BTreeMap<String, String>,
 
     /// Unrecognized keys are kept as they are; same reason as [`GlobalConfig::extra`].
