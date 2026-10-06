@@ -15,6 +15,7 @@
 //! The tests are grouped by area, and every area builds on the sandbox in [`support`].
 
 mod config;
+mod config_set;
 mod detection;
 mod local;
 mod plugins;

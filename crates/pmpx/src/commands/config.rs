@@ -43,6 +43,18 @@ pub(super) fn config_cmd(cmd: &ConfigCommand) -> crate::error::Result<u8> {
                 std::fs::create_dir_all(parent).map_err(|e| PmpxError::Other(e.into()))?;
             }
             let text = toml::to_string_pretty(&doc).map_err(|e| PmpxError::Other(e.into()))?;
+
+            // Checked *before* anything is written, because the reader is strict about types: without
+            // this, `config set discovery.walk_up maybe` would be accepted happily, and then every
+            // later command would fail to read the file at all -- a typo turning into an unusable
+            // installation.
+            if let Err(error) = toml::from_str::<crate::config::GlobalConfig>(&text) {
+                return Err(PmpxError::Usage(format!(
+                    "{key} = {} is not a valid value: {error}\nNothing was written.",
+                    render_value(&parsed)
+                )));
+            }
+
             crate::config::atomic_write(&path, &text).map_err(PmpxError::Other)?;
 
             anstream::println!(
