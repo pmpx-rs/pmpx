@@ -160,8 +160,12 @@ jobs:
       # and it catches problems only the publish path exposes, such as a missing `version`
       # or an unpublished dependency.
       #
-      # `pmpx-plugin` and `pmpx-plugin-abi` have no registry dependencies, so both can be fully
-      # packaged + compiled.
+      # Only a crate whose dependencies are already on crates.io can be *fully* packaged here:
+      # `pmpx-plugin-abi` has none, so it can. Everything that depends on a workspace crate that
+      # is not published yet -- `pmpx-plugin` (on the abi), `pmpx-loader`, `pmpx` -- is checked
+      # for file assembly instead, because `--list` does not resolve the registry. `--no-verify`
+      # is not a way around it: the failure happens while preparing the package for upload, before
+      # verification runs.
       #
       # `pmpx` cannot: it depends on the **published version** of `pmpx-plugin` (when
       # packaging, cargo strips `path` and keeps only the version number). Right after a
@@ -180,7 +184,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo package -p pmpx-plugin-abi --locked
-          cargo package -p pmpx-plugin --locked
+          cargo package -p pmpx-plugin --list
           # `--list` only: `pmpx-loader` depends on `pmpx-plugin-abi` by path (not published yet), so
           # full packaging would wait on a registry. The same reason `pmpx` is checked this way.
           cargo package -p pmpx-loader --list
