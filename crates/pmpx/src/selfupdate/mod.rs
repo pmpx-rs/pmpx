@@ -47,7 +47,7 @@ use self::archive::extract;
 use self::checksum::{parse_sha256sums, sha256_hex};
 use self::ledger::{install_kind, InstallKind};
 use self::release::{archive_ext, asset_stem, download, latest_version, repository_parts};
-use self::swap::{append_to_name, remove_dir_if_exists, replace, Scratch};
+use self::swap::{append_to_name, remove_dir_if_exists, replace, Scratch, UpdateLock};
 use self::version::Version;
 
 pub use self::swap::cleanup_stale_old;
@@ -209,6 +209,10 @@ fn update(exe: &Path, version: &Version) -> anyhow::Result<()> {
             exe.display()
         )
     })?;
+
+    // One update at a time: the names it writes beside the binary are fixed, so two runs would
+    // otherwise install each other's archive or delete each other's backup.
+    let _lock = UpdateLock::acquire(exe)?;
 
     let scratch = directory.join(format!(".pmpx-update-{}", std::process::id()));
     remove_dir_if_exists(&scratch);

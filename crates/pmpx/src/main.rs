@@ -45,7 +45,8 @@ fn main() -> std::process::ExitCode {
     // The only thing that happens before the arguments are parsed. On Windows an update
     // cannot delete the binary it replaced while that binary is still running, so the
     // leftover `.old` is deleted on the next start instead -- silently, because a failure
-    // only means "next time". It compiles to nothing on other platforms.
+    // only means "next time". A `.new` that never made it into place goes the same way, on
+    // every platform.
     let t = debug::now();
     selfupdate::cleanup_stale_old();
     debug::done("self-update", t, || "stale .old cleanup");
