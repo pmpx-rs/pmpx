@@ -96,6 +96,15 @@ pub unsafe fn dispatch_command(
         return PMPX_ERR_INVALID_ARGS;
     };
 
+    // A length without an array is not "empty": reading it would be undefined behaviour, and a
+    // bogus length would allocate before the first element is even touched. `pmpx` always passes a
+    // real pointer -- it builds both arrays from `Vec`s -- but the whole point of this shell is not
+    // to assume that. (A length *larger* than the caller's array cannot be detected here, which is
+    // why the `command` contract puts that on the caller.)
+    if (matched_len > 0 && matched.is_null()) || (args_len > 0 && args.is_null()) {
+        return PMPX_ERR_INVALID_ARGS;
+    }
+
     let project_root = PathBuf::from(unsafe { read_os(project_root) });
 
     // `matched` is text (file names declared in the manifest), so UTF-8 is checked here.

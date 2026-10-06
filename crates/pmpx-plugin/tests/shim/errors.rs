@@ -57,3 +57,41 @@ fn a_panicking_plugin_does_not_take_the_host_down() {
     let code = call_command("/proj", &[], Some(Verb::Install), &["panic"]).unwrap_err();
     assert_eq!(code, abi::PMPX_ERR_INTERNAL);
 }
+
+/// A length with no array behind it is rejected rather than dereferenced.
+///
+/// Defence in depth -- `pmpx` itself always passes real pointers -- but the shell exists precisely
+/// so the two sides need not trust each other, and a null pointer with a non-zero length is
+/// undefined behaviour rather than an empty input.
+#[test]
+fn a_null_array_with_a_length_is_rejected() {
+    let e = entry();
+    let root = "/proj";
+    let root_s = PmpxStr {
+        ptr: root.as_ptr(),
+        len: root.len(),
+    };
+    let mut out = std::mem::MaybeUninit::<pmpx_plugin::abi::PmpxCommand>::uninit();
+
+    for (matched_len, args_len) in [(0, 1), (1, 0)] {
+        // SAFETY: `out` is writable, and the null arrays are exactly what is being rejected --
+        // nothing on this side reads them.
+        let code = unsafe {
+            (e.command)(
+                root_s,
+                std::ptr::null(),
+                matched_len,
+                Verb::Install.to_abi(),
+                std::ptr::null(),
+                args_len,
+                out.as_mut_ptr(),
+            )
+        };
+
+        assert_eq!(
+            code,
+            abi::PMPX_ERR_INVALID_ARGS,
+            "matched_len {matched_len}, args_len {args_len} should be rejected"
+        );
+    }
+}

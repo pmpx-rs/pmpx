@@ -24,7 +24,8 @@ pub const PMPX_OK: u32 = 0;
 /// [`PMPX_ERR_INTERNAL`].
 pub const PMPX_ERR_UNSUPPORTED_VERB: u32 = 1;
 
-/// Invalid input -- an unknown verb number, a null `out`, or non-UTF-8 in `matched`.
+/// Invalid input -- an unknown verb number, a null `out`, a length without an array in `matched`
+/// or `args`, or non-UTF-8 in `matched`.
 pub const PMPX_ERR_INVALID_ARGS: u32 = 2;
 
 /// The plugin failed internally, or it panicked (a panic is caught by [`guard`](crate::abi::guard)
@@ -147,6 +148,9 @@ pub struct PmpxPluginV1 {
     /// # Safety
     /// - `project_root` / `matched` / `args` must be allocated by the host, valid and read-only
     ///   for the duration of the call;
+    /// - `matched_len` / `args_len` must be the real lengths of those arrays -- a length larger
+    ///   than the array cannot be detected on this side, unlike a null pointer with a length,
+    ///   which is rejected with [`PMPX_ERR_INVALID_ARGS`];
     /// - `out` must point at a writable [`PmpxCommand`];
     /// - a panic must not cross this boundary: since Rust 1.81, unwinding across `extern "C"`
     ///   aborts the process and the host's `catch_unwind` cannot save it, so `export!` wraps every
