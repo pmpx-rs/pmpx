@@ -115,9 +115,15 @@ impl Walk {
 
 /// Normalize a directory into a directly comparable form.
 ///
+/// Make a path absolute and lexically normal: no `.`, no `..`, no trailing separator.
+///
+/// The one place the engine decides how a path it reports is spelled, so the walk, the start
+/// directory and the context handed to a plugin all agree. See the note below on why this is not
+/// `canonicalize`.
+///
 /// On Windows `C:\Users\me` and `C:\Users\me\` are the same directory but not equal as `PathBuf`s,
 /// and the `$HOME` check is exactly that equality; `.` and `..` must be removed too.
-fn normalize(p: &Path) -> PathBuf {
+pub(crate) fn normalize(p: &Path) -> PathBuf {
     let absolute = if p.is_absolute() {
         p.to_path_buf()
     } else {

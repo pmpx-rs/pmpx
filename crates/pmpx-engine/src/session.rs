@@ -402,14 +402,23 @@ where
 ///
 /// `-C` must exist, otherwise it is a clear setup error -- quietly falling back to cwd would make "I ran
 /// the command in the wrong directory" hard to notice.
+///
+/// Normalized by [`discovery::normalize`], **not** `canonicalize`: `std::fs::canonicalize` -- and
+/// `std::path::absolute` with it -- returns a Windows verbatim path (`\\?\C:\…`), which then travels into
+/// the context a plugin is handed, and tools that take a path as an argument (cargo, `cmd`, the package
+/// managers themselves) either refuse that form or read it differently. Resolving symlinks is not this
+/// layer's business either: the person asked for the directory they named.
 fn resolve_start_dir(dir: Option<&Path>) -> Result<PathBuf> {
     match dir {
-        Some(dir) => std::fs::canonicalize(dir).map_err(|error| {
-            EngineError::Usage(format!(
-                "cannot use {} as the directory: {error}",
-                dir.display()
-            ))
-        }),
+        Some(dir) => {
+            if !dir.is_dir() {
+                return Err(EngineError::Usage(format!(
+                    "cannot use {} as the directory: it is not a directory",
+                    dir.display()
+                )));
+            }
+            Ok(discovery::normalize(dir))
+        }
         None => std::env::current_dir().map_err(|error| {
             EngineError::Setup(format!("cannot read the current directory: {error}"))
         }),
@@ -433,10 +442,24 @@ mod tests {
 
     #[test]
     fn resolve_start_dir_accepts_an_existing_one() {
-        let tmp = tempfile::tempdir().unwrap();
+        // A directory named the way a person names one -- `tempfile` is not used here because its
+        // paths already carry the Windows verbatim prefix, which would hide what this asserts.
+        let dir = std::env::temp_dir().join(format!("pmpx-start-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
 
-        let resolved = resolve_start_dir(Some(tmp.path())).unwrap();
+        let resolved = resolve_start_dir(Some(&dir)).unwrap();
 
         assert!(resolved.is_absolute());
+        assert_eq!(
+            resolved.file_name(),
+            dir.file_name(),
+            "a plain path stays the path it was: {resolved:?}"
+        );
+        assert!(
+            !resolved.to_string_lossy().starts_with(r"\\?\"),
+            "pmpx must never introduce a Windows verbatim path: {resolved:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
