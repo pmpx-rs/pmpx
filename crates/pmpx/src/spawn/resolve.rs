@@ -37,11 +37,12 @@ pub struct Resolved {
 
 /// Resolve the real path of a backend executable.
 ///
-/// - `program` containing a path separator means use it directly, without searching PATH
-///   (the user pointed at a path explicitly).
+/// - `program` containing a path separator means use it directly, without searching PATH (the
+///   plugin pointed at a path). A relative one is resolved against `cwd` -- the directory the
+///   command will actually run in -- and not against wherever pmpx happened to be started.
 /// - Otherwise go through `which`. On Windows it does PATHEXT resolution, which is exactly
 ///   what is needed here.
-pub fn resolve(program: &OsStr) -> Result<Resolved> {
+pub fn resolve(program: &OsStr, cwd: &Path) -> Result<Resolved> {
     let as_path = Path::new(program);
 
     let has_separator = as_path.components().any(|c| {
@@ -52,12 +53,19 @@ pub fn resolve(program: &OsStr) -> Result<Resolved> {
     }) || program.to_string_lossy().contains(['/', '\\']);
 
     let path = if has_separator {
-        if as_path.is_file() {
+        let candidate = if as_path.is_absolute() {
             as_path.to_path_buf()
         } else {
+            cwd.join(as_path)
+        };
+
+        if candidate.is_file() {
+            candidate
+        } else {
             return Err(PmpxError::not_found(format!(
-                "cannot find {}. It looks like a path, but there is no file there.",
-                as_path.display()
+                "cannot find {}: there is no file at {}.",
+                as_path.display(),
+                candidate.display()
             )));
         }
     } else {
@@ -124,15 +132,37 @@ mod tests {
 
     // ---- resolution ----------------------------------------------------------
 
-    /// With a path separator it is used directly, without searching PATH.
+    /// With a path separator it is used directly, without searching PATH -- relative to the
+    /// directory the command runs in.
     #[test]
     fn an_explicit_path_is_used_as_is() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("thing");
         std::fs::write(&p, "").unwrap();
 
-        let r = resolve(p.as_os_str()).unwrap();
+        let r = resolve(p.as_os_str(), tmp.path()).unwrap();
         assert_eq!(r.program, p);
+    }
+
+    /// A relative program belongs to the directory the process will run in: a plugin that says
+    /// `node_modules/.bin/tsc` means the project's, not the one pmpx was started from. (Nothing in
+    /// this crate changes its own directory, so the two can differ.)
+    #[test]
+    fn a_relative_program_is_resolved_against_the_given_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("tool"), "").unwrap();
+
+        let r = resolve(OsStr::new("./tool"), &work).unwrap();
+        assert!(r.program.is_file(), "{:?}", r.program);
+        assert_eq!(r.program.file_name().unwrap(), "tool");
+
+        // The same name against a directory that does not hold it fails, which is what shows the
+        // answer came from the given directory rather than from this process's own.
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert!(resolve(OsStr::new("./tool"), &elsewhere).is_err());
     }
 
     #[test]
@@ -140,21 +170,30 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("nope").join("thing");
 
-        let err = resolve(p.as_os_str()).unwrap_err();
+        let err = resolve(p.as_os_str(), tmp.path()).unwrap_err();
         assert_eq!(err.exit_code(), crate::error::EXIT_NOT_FOUND);
-        assert!(err.to_string().contains("path"));
+        assert!(
+            err.to_string().contains("nope"),
+            "the message should name what it looked for: {err}"
+        );
     }
 
     /// `cargo` is guaranteed to resolve right now -- we are running inside `cargo test`.
     #[test]
     fn resolves_a_real_program_from_path() {
-        let r = resolve(OsStr::new("cargo")).expect("cargo must be on PATH");
+        let tmp = tempfile::tempdir().unwrap();
+        let r = resolve(OsStr::new("cargo"), tmp.path()).expect("cargo must be on PATH");
         assert!(r.program.is_absolute(), "{:?}", r.program);
     }
 
     #[test]
     fn a_missing_program_gives_exit_code_three() {
-        let err = resolve(OsStr::new("pmpx-definitely-not-a-real-program-xyz")).unwrap_err();
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve(
+            OsStr::new("pmpx-definitely-not-a-real-program-xyz"),
+            tmp.path(),
+        )
+        .unwrap_err();
         assert_eq!(err.exit_code(), crate::error::EXIT_NOT_FOUND);
     }
 

@@ -5,13 +5,13 @@
 //! `pwsh -NoProfile -File`. Why `.cmd` / `.bat` is deliberately *not* one of them is the one
 //! thing worth reading in [`command_for`].
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use pmpx_plugin::CommandSpec;
 
 use super::resolve::{resolve, ProgramKind};
-use crate::error::Result;
+use crate::error::{PmpxError, Result};
 
 /// Build a [`Command`] for a [`Resolved`](super::resolve::Resolved) kind, without running it.
 ///
@@ -19,11 +19,12 @@ use crate::error::Result;
 /// [`run`](super::run) inherits stdio.
 ///
 /// `cwd` is only the fallback: a working directory the plugin put in the spec **wins**, and it is
-/// resolved here rather than by every caller, so a plugin's `cwd` cannot silently depend on the
-/// caller remembering to apply it.
+/// applied here rather than by every caller, so a plugin's `cwd` cannot silently depend on the
+/// caller remembering to apply it. It is also decided *before* the program is resolved, so a
+/// relative program is looked up in the directory the process will actually run in.
 pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
-    let resolved = resolve(&spec.program)?;
     let cwd = spec.cwd.as_deref().unwrap_or(cwd);
+    let resolved = resolve(&spec.program, cwd)?;
 
     let mut cmd = match resolved.kind {
         // A batch file is started by handing the *file* to `Command`: std knows that a
@@ -47,7 +48,12 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
             // the package manager behaves, and it can be slow. `-ExecutionPolicy Bypass` is
             // not added -- changing security policy is not pmpx's job, and when a policy
             // blocks it PowerShell should report the real reason itself.
-            let mut c = Command::new("pwsh");
+            //
+            // The interpreter is looked up like any other tool, so a machine without one gets the
+            // same exit-3 "not on PATH" error as a missing backend instead of a bare
+            // "failed to start pwsh".
+            let interpreter = resolve_powershell()?;
+            let mut c = Command::new(interpreter);
             c.arg("-NoProfile").arg("-File").arg(&resolved.program);
             c.args(&spec.args);
             c
@@ -62,6 +68,23 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
         .stderr(Stdio::inherit());
 
     Ok(cmd)
+}
+
+/// PowerShell to run a `.ps1` shim with: PowerShell 7 first, then the one Windows ships.
+///
+/// `.ps1` only ever wins a PATH lookup when `PATHEXT` has been extended with it, so this is a rare
+/// path -- but a rare path with an unusable error message is still worth ten lines.
+fn resolve_powershell() -> Result<PathBuf> {
+    for name in ["pwsh", "powershell"] {
+        if let Ok(path) = which::which(name) {
+            return Ok(path);
+        }
+    }
+
+    Err(PmpxError::not_found(
+        "pmpx runs .ps1 shims with PowerShell, and neither `pwsh` nor `powershell` is on PATH."
+            .to_string(),
+    ))
 }
 
 #[cfg(test)]

@@ -12,9 +12,10 @@ use std::path::PathBuf;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandSpec {
-    /// Executable. The host resolves it to a real path with `which` and decides per platform
-    /// whether to wrap it in `cmd /C` (on Windows `pnpm` is really `pnpm.cmd`, and spawning it
-    /// directly fails).
+    /// Executable. It may be a bare name (resolved on `PATH`), an absolute path, or a path
+    /// relative to this spec's [`cwd`](CommandSpec::cwd) -- which is the project root when the
+    /// spec does not name one. On Windows a bare name resolves through `PATHEXT`, so `pnpm` finds
+    /// `pnpm.cmd`, and the host starts a batch file the way the platform requires.
     pub program: OsString,
 
     /// Arguments, in order.

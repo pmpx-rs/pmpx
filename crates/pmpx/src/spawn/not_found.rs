@@ -6,6 +6,9 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+#[cfg(test)]
+use std::path::Path;
+
 use crate::error::PmpxError;
 
 /// When nothing is found, say something that guides the next step: list the near-matching
@@ -119,7 +122,11 @@ mod tests {
     /// The message for "not found" has to carry information.
     #[test]
     fn a_missing_program_says_something_useful() {
-        let err = resolve(OsStr::new("pmpx-definitely-not-a-real-program-xyz")).unwrap_err();
+        let err = resolve(
+            OsStr::new("pmpx-definitely-not-a-real-program-xyz"),
+            Path::new("."),
+        )
+        .unwrap_err();
         let msg = err.to_string();
 
         assert!(
