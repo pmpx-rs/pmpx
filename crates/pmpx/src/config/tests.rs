@@ -190,8 +190,10 @@ fn expand_tilde_expands_to_home() {
     );
 }
 
+/// The pins are the detection's input, so the merge is asserted as the map the decision is handed --
+/// "which families are pinned" is derived there, from these keys.
 #[test]
-fn pinned_families_lists_every_pin() {
+fn the_merged_pins_are_the_map_the_decision_reads() {
     let tmp = tempfile::tempdir().unwrap();
     let a = write(
         tmp.path(),
@@ -200,9 +202,14 @@ fn pinned_families_lists_every_pin() {
     );
 
     let merged = MergedProjectConfig::from_paths_near_to_far(&[a]).unwrap();
-    let mut fams = merged.pinned_families();
-    fams.sort_unstable();
-    assert_eq!(fams, vec!["node", "rust"]);
+
+    assert_eq!(
+        merged.plugin,
+        std::collections::BTreeMap::from([
+            ("node".to_string(), "pnpm".to_string()),
+            ("rust".to_string(), "cargo".to_string()),
+        ])
+    );
 }
 
 // ---- Environment variable overrides -----------------------------------

@@ -431,6 +431,7 @@ dependencies = [
  "crate-plugin-kit",
  "directories",
  "flate2",
+ "pmpx-detect",
  "pmpx-loader",
  "pmpx-plugin",
  "ring",
@@ -444,6 +445,10 @@ dependencies = [
  "which",
  "zip",
 ]
+
+[[package]]
+name = "pmpx-detect"
+version = "0.2.1"
 
 [[package]]
 name = "pmpx-loader"

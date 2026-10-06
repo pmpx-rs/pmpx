@@ -66,7 +66,7 @@ pub fn run_verb(
         root: &root,
         start_dir: &session.start_dir,
         matched: &selection.matched,
-        reason: selection.reason,
+        reason: crate::detect::reason_of(selection.reason),
         score: selection.score,
         pins: &session.project.plugin,
         config_files: &session.project.sources,

@@ -106,9 +106,4 @@ impl MergedProjectConfig {
     pub fn pinned_plugin(&self, family: &str) -> Option<&str> {
         self.plugin.get(family).map(String::as_str)
     }
-
-    /// Every family that has been pinned.
-    pub fn pinned_families(&self) -> Vec<&str> {
-        self.plugin.keys().map(String::as_str).collect()
-    }
 }

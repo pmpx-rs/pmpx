@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use crate_plugin_kit::{CratePluginKit, KitConfig};
 use pmpx_plugin::abi::PmpxPlugin;
-use pmpx_plugin::Family;
 
 use crate::cli::Cli;
 use crate::config::{GlobalConfig, MergedProjectConfig};
@@ -235,7 +234,7 @@ impl Session {
     pub fn select_from(
         &self,
         root: &Path,
-        families: &BTreeMap<Family, FamilyScore>,
+        families: &BTreeMap<String, FamilyScore>,
     ) -> std::result::Result<Selection, DetectFailure> {
         detect::select_from_scores(
             &self.plugins,

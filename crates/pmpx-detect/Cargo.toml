@@ -1,0 +1,21 @@
+[package]
+name = "pmpx-detect"
+description = "Decides which installed plugin a project belongs to, from evidence that is already data."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["cli", "pmpx", "detection"]
+categories = ["development-tools"]
+
+# Zero dependencies, on purpose: this crate is the decision, and a decision should be testable without
+# a project, a process, or a plugin. It reads no file, prints nothing, and knows no ecosystem.
+[dependencies]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

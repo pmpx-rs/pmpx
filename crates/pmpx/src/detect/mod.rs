@@ -1,175 +1,96 @@
-//! Detection and resolution. Two steps, in order:
+//! Detection, wired to this host.
 //!
-//! 1. **Scoring** — how many detect files each installed plugin matches in the project root
-//!    (strong evidence 100 points, weak evidence 10 points);
-//! 2. **Resolution** — pick a family first, then a plugin inside that family.
-//!
-//! Without a lockfile the family is undecidable: library crates often gitignore `Cargo.lock`, and
-//! then `Cargo.toml` (10) and `package.json` (10) tie, so `family_priority` resolves them to node.
-//! The escape hatches are pinning in `.pmpx.toml` (floor 50) or reordering `family_priority`.
-//!
-//! This file is step 1 and the constants both steps share; [`resolve`] is step 2, and [`failure`]
-//! holds the reasons step 2 can fail.
+//! The decision itself -- scoring, family choice, plugin choice, and every way that can fail -- lives
+//! in `pmpx-detect`, which takes data and returns data. This module is the wire between it and this
+//! host: the installed plugins as [`Candidate`]s, the project directory as a [`Presence`](pmpx_detect::Presence), the pins and
+//! orderings from the two config layers, and the reason mapped onto the contract's wire form (the
+//! plugin is told why it was picked).
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use pmpx_plugin::Family;
+use pmpx_detect::{Candidate, Pins, Preferences};
+use pmpx_plugin::{Family, SelectionReason};
 
-use crate::config::MergedProjectConfig;
-use crate::debug;
-use crate::plugins::{InstalledPlugin, PluginSet};
+use crate::config::{GlobalConfig, MergedProjectConfig};
+use crate::plugins::PluginSet;
 
-mod failure;
-mod resolve;
+pub use pmpx_detect::{DetectFailure, FamilyScore, Reason, ScoredPlugin, Selection};
 
-pub use failure::DetectFailure;
-pub use resolve::{select, select_from_scores, Selection};
+/// A real directory, answering the decision's one question.
+struct Dir<'a> {
+    root: &'a Path,
+}
 
-/// Points for matching one piece of **strong evidence**.
-pub const STRONG_SCORE: u32 = 100;
-/// Points for matching one piece of **weak evidence**; it can never outweigh a lockfile
-/// (100 points), so plugin authors need not agonize over which bucket a file belongs in.
-pub const WEAK_SCORE: u32 = 10;
-/// **Score floor** for a family pinned in `.pmpx.toml`.
+impl pmpx_detect::Presence for Dir<'_> {
+    fn has(&self, relative: &str) -> bool {
+        self.root.join(relative).exists()
+    }
+}
+
+/// The project, as the decision sees it.
+pub fn presence(root: &Path) -> impl pmpx_detect::Presence + '_ {
+    Dir { root }
+}
+
+/// Every installed plugin, as data.
 ///
-/// Stronger than a 10-point manifest file (it rescues a lockless library crate) and weaker than a
-/// 100-point lockfile (it does not overstep when a real lockfile exists).
-pub const PIN_FLOOR: u32 = 50;
-
-// The floor must sit between weak and strong evidence.
-const _: () = assert!(PIN_FLOOR > WEAK_SCORE);
-const _: () = assert!(PIN_FLOOR < STRONG_SCORE);
-
-// ---- Scoring ---------------------------------------------------------------
-
-/// One plugin's score breakdown in one directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScoredPlugin {
-    /// Crate name.
-    pub crate_name: String,
-    /// The plugin's self-reported name.
-    pub name: String,
-    /// Matched strong-evidence files.
-    pub strong_hits: Vec<String>,
-    /// Matched weak-evidence files.
-    pub weak_hits: Vec<String>,
-    /// `100 × strong_hits + 10 × weak_hits`
-    pub score: u32,
-}
-
-impl ScoredPlugin {
-    /// Score one plugin inside `dir`.
-    pub fn score(plugin: &InstalledPlugin, dir: &Path) -> Self {
-        let strong_hits = hits(dir, &plugin.strong);
-        let weak_hits = hits(dir, &plugin.weak);
-
-        let score = STRONG_SCORE * strong_hits.len() as u32 + WEAK_SCORE * weak_hits.len() as u32;
-
-        Self {
-            crate_name: plugin.crate_name.clone(),
-            name: plugin.name.clone(),
-            strong_hits,
-            weak_hits,
-            score,
-        }
-    }
-
-    /// All matched files (strong + weak), for `info` to display.
-    pub fn all_hits(&self) -> impl Iterator<Item = &str> {
-        self.strong_hits
-            .iter()
-            .chain(self.weak_hits.iter())
-            .map(String::as_str)
-    }
-}
-
-/// One family's score and the plugins under it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FamilyScore {
-    /// Family.
-    pub family: Family,
-    /// `max(highest score among its plugins, pin ? 50 : 0)`
-    pub score: u32,
-    /// Whether `.pmpx.toml` pins this family.
-    pub pinned: bool,
-    /// Installed plugins under it (including 0-point ones — `info` must show them).
-    pub plugins: Vec<ScoredPlugin>,
-}
-
-fn hits(dir: &Path, names: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = names
+/// The unusable ones are included and carry their problem as text: a pin or `-p` naming one of them has
+/// to produce "installed but broken", not "not installed".
+pub fn candidates(set: &PluginSet) -> Vec<Candidate> {
+    set.plugins
         .iter()
-        .filter(|n| dir.join(n.as_str()).exists())
-        .cloned()
-        .collect();
-    out.sort();
-    out
+        .map(|p| Candidate {
+            crate_name: p.crate_name.clone(),
+            name: p.name.clone(),
+            family: p
+                .family
+                .as_ref()
+                .map(Family::as_str)
+                .unwrap_or("")
+                .to_string(),
+            strong: p.strong.clone(),
+            weak: p.weak.clone(),
+            problem: p.problem().map(str::to_string),
+        })
+        .collect()
 }
 
-/// Score every installed plugin, then aggregate by family.
-///
-/// The returned map **also contains** families that are "pinned but have no plugin installed"
-/// (score = floor) — such a case must be selectable, so that pmpx can report "no plugin can handle
-/// this family" instead of a vague "no project type detected".
+/// The `[plugin]` pins from the merged project config.
+pub fn pins(merged: &MergedProjectConfig) -> Pins {
+    merged.plugin.clone()
+}
+
+/// The orderings the user configured.
+pub fn preferences(global: &GlobalConfig) -> Preferences {
+    Preferences {
+        family_priority: global.plugin.family_priority.clone(),
+        priority: global.plugin.priority.clone(),
+    }
+}
+
+/// The contract's word for a decision's reason: this is what crosses to the plugin, which is why the
+/// wire form belongs to the contract and the plain one to the decision.
+pub fn reason_of(reason: Reason) -> SelectionReason {
+    match reason {
+        Reason::Scored => SelectionReason::Scored,
+        Reason::Pinned => SelectionReason::Pinned,
+        Reason::Explicit => SelectionReason::Explicit,
+    }
+}
+
+/// Score every installed plugin against the project root, aggregated by family.
 pub fn score_all(
     set: &PluginSet,
     root: &Path,
     merged: &MergedProjectConfig,
-) -> BTreeMap<Family, FamilyScore> {
-    let t = debug::now();
-    let mut families: BTreeMap<Family, FamilyScore> = BTreeMap::new();
+) -> BTreeMap<String, FamilyScore> {
+    let t = crate::debug::now();
+    let families = pmpx_detect::score_all(&candidates(set), &presence(root), &pins(merged));
 
-    for plugin in set.usable() {
-        // `usable()` guarantees family is Some
-        let Some(family) = plugin.family.clone() else {
-            continue;
-        };
-
-        let scored = ScoredPlugin::score(plugin, root);
-        let entry = families
-            .entry(family.clone())
-            .or_insert_with(|| FamilyScore {
-                family,
-                score: 0,
-                pinned: false,
-                plugins: Vec::new(),
-            });
-
-        // Family score = the **highest** score among its plugins, not the sum — four Node backends
-        // each matching `package.json` is just the same weak evidence counted four times.
-        entry.score = entry.score.max(scored.score);
-        entry.plugins.push(scored);
-    }
-
-    // The pin floor is applied after plugin scores are computed, hence max and not an overwrite.
-    for (family, fs) in families.iter_mut() {
-        if merged.pinned_plugin(family.as_str()).is_some() {
-            fs.pinned = true;
-            fs.score = fs.score.max(PIN_FLOOR);
-        }
-    }
-
-    // Families that are pinned but have no plugin installed must be present too.
-    for name in merged.pinned_families() {
-        let family = Family::new(name.to_string());
-        families
-            .entry(family.clone())
-            .or_insert_with(|| FamilyScore {
-                family,
-                score: PIN_FLOOR,
-                pinned: true,
-                plugins: Vec::new(),
-            });
-    }
-
-    for fs in families.values_mut() {
-        fs.plugins.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
-    }
-
-    // The marker count is the size of the job: one `exists()` per plugin per declared file,
-    // and every Node backend claims `package.json` again.
-    debug::done("detect.score", t, || {
+    // The marker count is the size of the job: one `exists()` per plugin per declared file, and every
+    // Node backend claims `package.json` again.
+    crate::debug::done("detect.score", t, || {
         format!(
             "{} plugins, {} marker names",
             set.usable().count(),
@@ -180,5 +101,69 @@ pub fn score_all(
     families
 }
 
-#[cfg(test)]
-mod tests;
+/// Resolve which plugin the project belongs to.
+pub fn select(
+    set: &PluginSet,
+    root: &Path,
+    merged: &MergedProjectConfig,
+    global: &GlobalConfig,
+    explicit: Option<&str>,
+) -> Result<Selection, DetectFailure> {
+    // Scoring goes through this host's own wrapper even on the one-call path, so the `--debug` trace
+    // names the work that is actually being done (and the marker count is the size of that work).
+    // Scoring once, then deciding, is also what the old two-step shape did.
+    let families = score_all(set, root, merged);
+
+    let t = crate::debug::now();
+    let result = pmpx_detect::select_from_scores(
+        &candidates(set),
+        &presence(root),
+        &pins(merged),
+        &preferences(global),
+        explicit,
+        &families,
+    );
+    trace(t, &result);
+    result
+}
+
+/// Resolve from scores the caller already computed, instead of scoring the project a second time.
+pub fn select_from_scores(
+    set: &PluginSet,
+    root: &Path,
+    families: &BTreeMap<String, FamilyScore>,
+    merged: &MergedProjectConfig,
+    global: &GlobalConfig,
+    explicit: Option<&str>,
+) -> Result<Selection, DetectFailure> {
+    let t = crate::debug::now();
+    let result = pmpx_detect::select_from_scores(
+        &candidates(set),
+        &presence(root),
+        &pins(merged),
+        &preferences(global),
+        explicit,
+        families,
+    );
+    trace(t, &result);
+    result
+}
+
+/// Nothing selected is **exit code 3**: pmpx itself is fine, the environment is missing something.
+///
+/// This lives here rather than in the decision crate because it is about *this* program's exit codes,
+/// and the decision has no opinion about processes.
+impl From<DetectFailure> for crate::error::PmpxError {
+    fn from(failure: DetectFailure) -> Self {
+        crate::error::PmpxError::NotFound(failure.message())
+    }
+}
+
+/// Both outcomes are reported: "nothing was selected, and it took 4ms to find that out" is as much
+/// part of the answer as the winner is.
+fn trace(t: std::time::Instant, result: &Result<Selection, DetectFailure>) {
+    crate::debug::done("detect.decide", t, || match result {
+        Ok(s) => format!("{} ({}, {} pts)", s.name, s.family, s.score),
+        Err(f) => format!("nothing selected: {}", f.message()),
+    });
+}

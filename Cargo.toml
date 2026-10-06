@@ -26,6 +26,9 @@ pmpx-plugin-abi = { path = "crates/pmpx-plugin-abi", version = "0.2.1" }
 # two sides meet, so the CLI itself never sees a pointer.
 pmpx-loader = { path = "crates/pmpx-loader", version = "0.2.1" }
 
+# The decision: scoring and resolution, on data. Zero dependencies, no filesystem, no printing.
+pmpx-detect = { path = "crates/pmpx-detect", version = "0.2.1" }
+
 # General plugin management library. An external dependency, consumed by version, not by path.
 crate-plugin-kit = "0.2.0"
 
