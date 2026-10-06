@@ -129,6 +129,11 @@ impl From<pmpx_engine::EngineError> for PmpxError {
             EngineError::NoProject(message) => PmpxError::NotFound(message),
             EngineError::Detect(failure) => PmpxError::NotFound(failure.message()),
 
+            // The plugin store refused: a network failure, a build that would not compile, a crate that
+            // is not there. The kit's message says which, and pmpx has nothing to add -- so this is
+            // pmpx's own failure, not the user's usage.
+            EngineError::Kit(error) => PmpxError::Other(anyhow::anyhow!(error)),
+
             // The plugin answered normally that it cannot do this: a usage error if that is what it said,
             // and pmpx's own failure if it broke.
             EngineError::Call {

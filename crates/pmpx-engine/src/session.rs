@@ -429,6 +429,52 @@ fn resolve_start_dir(dir: Option<&Path>) -> Result<PathBuf> {
     }
 }
 
+/// The plugin store, as the host's commands use it.
+///
+/// Thin on purpose: the kit does the work, and this is where its vocabulary stops. A command says
+/// `session.install("pnpm", None)` and never has to know that the plugin store is a crate called
+/// `crate-plugin-kit` -- which is also why the field holding it is not public.
+impl Session {
+    /// The manifest file name this host's plugins use.
+    pub fn manifest_name(&self) -> &str {
+        &self.kit.config().manifest_name
+    }
+
+    /// `pnpm` becomes `pmpx-plugin-pnpm`.
+    pub fn normalize_crate_name(&self, name: &str) -> String {
+        self.kit.config().normalize_crate_name(name)
+    }
+
+    /// Install a plugin by short name, from the registry or a prebuilt asset.
+    pub fn install(&self, name: &str, version: Option<&str>) -> Result<crate::store::Installed> {
+        Ok(self.kit.install(name, version)?)
+    }
+
+    /// Install the plugin in a local checkout.
+    pub fn install_from_path(&self, dir: &Path) -> Result<crate::store::Installed> {
+        Ok(self.kit.install_from_path(dir)?)
+    }
+
+    /// Remove an installed plugin.
+    pub fn uninstall(&self, name: &str) -> Result<()> {
+        Ok(self.kit.uninstall(name)?)
+    }
+
+    /// Rebuild an installed plugin from the source it was installed from.
+    pub fn update(&self, name: &str, version: Option<&str>) -> Result<crate::store::Installed> {
+        Ok(self.kit.update(name, version)?)
+    }
+
+    /// Search crates.io.
+    pub fn search(&self, keyword: &str, limit: usize) -> Result<Vec<crate::store::CrateSummary>> {
+        Ok(self.kit.search(keyword, limit)?)
+    }
+
+    /// What crates.io knows about one crate.
+    pub fn view(&self, crate_name: &str) -> Result<Option<crate::store::CrateInfo>> {
+        Ok(self.kit.view(crate_name)?)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

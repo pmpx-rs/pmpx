@@ -182,5 +182,77 @@ impl PluginSet {
     }
 }
 
+// The kit's own types, named here so that the host's commands never mention the kit: a command prints
+// an `InstallSource` or shows an `Installed`, and where those come from is this module's business.
+pub use crate_plugin_kit::cache::InstallSource;
+pub use crate_plugin_kit::install::Installed;
+pub use crate_plugin_kit::{CrateInfo, CrateSummary};
+
+use crate::EngineError;
+
+/// What a plugin checkout declares, read out of its manifest.
+///
+/// The kit installs whatever compiles; whether *this host* can use it is this crate's business, and this
+/// is the whole answer to that question. Turning it into refusals and warnings -- the words -- belongs to
+/// the command, because the words are presentation.
+#[derive(Debug, Clone)]
+pub struct VetReport {
+    /// The ABI version the checkout declares.
+    pub abi: Option<u32>,
+
+    /// Its family, if it declares one.
+    pub family: Option<String>,
+
+    /// Every `[detect]` marker it would be selected by, strong and weak together.
+    pub markers: Vec<String>,
+}
+
+/// Read the manifest of a plugin checkout.
+///
+/// A directory without the manifest is not a checkout, which is a usage error: the person named a place
+/// that has nothing to install from.
+pub fn vet_checkout(dir: &Path, manifest_name: &str) -> Result<VetReport, EngineError> {
+    let path = dir.join(manifest_name);
+
+    if !path.is_file() {
+        return Err(EngineError::Usage(format!(
+            "{} has no {manifest_name}, so it is not a plugin checkout",
+            dir.display()
+        )));
+    }
+
+    let manifest = crate_plugin_kit::PluginManifest::read(&path)
+        .map_err(|error| EngineError::Usage(format!("cannot read {}: {error}", path.display())))?;
+
+    Ok(VetReport {
+        abi: manifest.plugin.abi,
+        family: manifest.plugin.family.clone(),
+        markers: markers(&manifest),
+    })
+}
+
+/// Every `[detect]` marker the manifest declares.
+fn markers(manifest: &crate_plugin_kit::PluginManifest) -> Vec<String> {
+    let mut out = str_array(manifest, "detect", "strong");
+    out.extend(str_array(manifest, "detect", "weak"));
+    out
+}
+
+/// One `[section] key = [...]` out of the host's own sections.
+fn str_array(manifest: &crate_plugin_kit::PluginManifest, section: &str, key: &str) -> Vec<String> {
+    manifest
+        .extra
+        .get(section)
+        .and_then(|section| section.get(key))
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
 #[cfg(test)]
 mod tests;

@@ -10,6 +10,14 @@ use std::fmt;
 /// A program that could not be started.
 #[derive(Debug)]
 pub enum EngineError {
+    /// The plugin store refused -- installing, removing, or looking something up -- and the kit's own
+    /// message is the whole explanation; this crate has nothing to add to it.
+    ///
+    /// Behind the `store` feature, because the kit is an optional dependency: a host that only runs
+    /// plugins does not pay for `ureq`, `rustls` and `ring`, and neither does its error type.
+    #[cfg(feature = "store")]
+    Kit(crate_plugin_kit::KitError),
+
     /// The program was not found: either the path a plugin pointed at does not exist, or no name on
     /// `PATH` matches.
     ///
@@ -57,6 +65,8 @@ impl EngineError {
     /// The full explanation, for whoever is showing it.
     pub fn message(&self) -> String {
         match self {
+            #[cfg(feature = "store")]
+            Self::Kit(error) => error.to_string(),
             Self::NotFound(message) | Self::Usage(message) | Self::Setup(message) => {
                 message.clone()
             }
@@ -100,8 +110,17 @@ impl std::error::Error for EngineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Start { source, .. } => Some(source),
+            #[cfg(feature = "store")]
+            Self::Kit(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(feature = "store")]
+impl From<crate_plugin_kit::KitError> for EngineError {
+    fn from(error: crate_plugin_kit::KitError) -> Self {
+        Self::Kit(error)
     }
 }
 
