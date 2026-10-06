@@ -7,6 +7,11 @@ use crate::{CommandSpec, Context, Family, PluginError, Verb};
 /// An implementation of one package manager backend, a purely synchronous interface: no `async`,
 /// no callbacks, no I/O -- passing a `Future` across the `dlopen` boundary is the most fragile
 /// part of this approach. It should only do mapping; see the crate docs for the constraints.
+///
+/// A panic in any of these methods is caught by the `export!` shell -- the `#[unsafe(no_mangle)]`
+/// wrapper catches it before it can cross `extern "C"`, which would abort the host process. The
+/// host then sees a failed call, or the [`PANIC_MARKER`](crate::abi::PANIC_MARKER) name, and
+/// refuses to use the plugin; the panic message itself goes to stderr as usual.
 pub trait PackageManager: Send + Sync {
     /// Plugin name, e.g. `"cargo"`. The host compares it against the name declared in the
     /// manifest and refuses to load on a mismatch.

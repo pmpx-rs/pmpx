@@ -34,3 +34,22 @@ fn name_and_family_come_back_and_are_freed() {
         (e.free_str)(family);
     }
 }
+
+/// `name` runs plugin code (the factory, then the trait method), so it needs the same protection
+/// `command` has: without it this test would not fail, it would abort the whole test process.
+///
+/// The host turns the marker into its own message -- see `pmpx`'s `Backend::load`.
+#[test]
+fn a_panicking_name_is_contained() {
+    let e = entry();
+
+    crate::set_panic_in_name(true);
+    let name = unsafe { (e.name)() };
+    crate::set_panic_in_name(false);
+
+    // SAFETY: the marker is this side's own leaked string, freed like any other answer.
+    unsafe {
+        assert_eq!(read(name), abi::PANIC_MARKER);
+        (e.free_str)(name);
+    }
+}

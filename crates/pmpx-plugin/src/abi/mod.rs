@@ -18,7 +18,7 @@ mod dispatch;
 mod marshal;
 mod types;
 
-pub use dispatch::{dispatch_command, free_command, guard, write_command};
+pub use dispatch::{dispatch_command, free_command, guard, guard_str, write_command, PANIC_MARKER};
 pub use marshal::{bytes_to_os, free_str, leak_bytes, leak_str, os_to_bytes, read_os, read_str};
 pub use types::{
     build_rustc, build_target, PmpxCommand, PmpxPluginV1, PmpxStr, ABI_VERSION, ENTRY_SYMBOL,

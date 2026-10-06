@@ -58,6 +58,20 @@ impl Backend {
 
         // The self-reported name must match what the manifest declares
         let self_reported = unsafe { read_plugin_str(entry.name, entry.free_str) };
+
+        // A plugin that panicked inside `name()` (or its factory) answers with the contract's
+        // marker instead of a name; the mismatch below would report that as an odd-looking pair of
+        // names, so say what actually happened.
+        if self_reported == pmpx_plugin::abi::PANIC_MARKER {
+            return Err(PmpxError::not_found(format!(
+                "plugin {} panicked while reporting its name -- its own panic message is on \
+                 stderr above.\n\
+                 Delete {} and install it again.",
+                plugin.name,
+                plugin.dir.display()
+            )));
+        }
+
         if self_reported != plugin.name {
             // Both names have to be printed -- just saying "they differ" leaves the user
             // unable to tell which one to trust

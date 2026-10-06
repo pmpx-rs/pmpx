@@ -7,8 +7,15 @@ use std::path::PathBuf;
 
 use crate::{CommandSpec, Context, PackageManager, Verb};
 
-use super::marshal::{free_str, leak_bytes, os_to_bytes, read_os, read_str};
+use super::marshal::{free_str, leak_bytes, leak_str, os_to_bytes, read_os, read_str};
 use super::types::{PmpxCommand, PmpxStr, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS, PMPX_OK};
+
+/// What `name` / `family` answer when the plugin panicked before it could answer at all.
+///
+/// A marker rather than an empty string: the host refuses to load a plugin whose name disagrees
+/// with its manifest, and this makes that refusal say what happened instead of showing an empty
+/// pair of quotes.
+pub const PANIC_MARKER: &str = "<the plugin panicked>";
 
 /// Write a [`CommandSpec`] in its cross-boundary form, with the memory allocated by this side.
 /// # Safety
@@ -131,6 +138,17 @@ pub fn guard(f: impl FnOnce() -> u32) -> u32 {
     // `AssertUnwindSafe`: once the caller has PMPX_ERR_INTERNAL it aborts the operation and never
     // touches the caught state again.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(PMPX_ERR_INTERNAL)
+}
+
+/// [`guard`] for the shims that answer with a [`PmpxStr`] instead of an error code: `name` and
+/// `family` run plugin code too (the factory and the trait method), so they need exactly the same
+/// protection -- a panic there aborts the host just as surely as one inside `command`.
+///
+/// The answer on a panic is [`PANIC_MARKER`], leaked like any other answer so the host frees it
+/// the same way.
+pub fn guard_str(f: impl FnOnce() -> PmpxStr) -> PmpxStr {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|_| leak_str(PANIC_MARKER))
 }
 
 #[cfg(test)]

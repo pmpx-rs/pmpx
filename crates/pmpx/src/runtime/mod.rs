@@ -6,10 +6,11 @@
 //! checks `abi_version == ABI_VERSION` (equality is enough, not full crate version equality)
 //! and that `name()` matches what the manifest declared.
 //!
-//! Every call into the plugin is wrapped in `catch_unwind`, but that is only a fallback --
-//! the main defence is the `extern "C"` shell that the plugin-side `export!` generates:
-//! since Rust 1.81, letting a panic cross `extern "C"` aborts outright and the host cannot
-//! rescue it.
+//! Every call into the plugin is wrapped in `catch_unwind` on **both** sides: the `extern "C"`
+//! shell that the plugin-side `export!` generates is the main defence (it covers `name`, `family`
+//! and `command` alike), and this side wraps one more layer for the cases where the plugin forgot
+//! to, or was built with `panic = "abort"`. A panic that crosses `extern "C"` since Rust 1.81
+//! aborts outright and the host cannot rescue it, which is why the plugin side cannot be skipped.
 //!
 //! [`backend`] is the loaded plugin, [`error`] the failures it can report, and [`strings`] the
 //! reading of the memory it hands back.

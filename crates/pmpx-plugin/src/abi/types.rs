@@ -149,8 +149,8 @@ pub struct PmpxPluginV1 {
     ///   for the duration of the call;
     /// - `out` must point at a writable [`PmpxCommand`];
     /// - a panic must not cross this boundary: since Rust 1.81, unwinding across `extern "C"`
-    ///   aborts the process and the host's `catch_unwind` cannot save it, so `export!` wraps
-    ///   everything in `catch_unwind`.
+    ///   aborts the process and the host's `catch_unwind` cannot save it, so `export!` wraps every
+    ///   shim -- this one and the `name` / `family` ones -- in `catch_unwind`.
     pub command: unsafe extern "C" fn(
         project_root: PmpxStr,
         matched: *const PmpxStr,

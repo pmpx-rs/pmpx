@@ -9,6 +9,7 @@
 //! symbol as a root item; [`support`] holds the calling helpers, and the tests are grouped by what
 //! they exercise.
 
+use std::cell::Cell;
 use std::ffi::OsString;
 
 use pmpx_plugin::{CommandSpec, Context, Family, PackageManager, PluginError, Verb};
@@ -19,11 +20,26 @@ mod mapping;
 mod support;
 mod vtable;
 
+// The switch the `name()` test flips. Thread-local on purpose: one test must not be able to make
+// another test's plugin panic while the suite runs in parallel.
+thread_local! {
+    static PANIC_IN_NAME: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Make the fake plugin panic inside `name()`.
+pub(crate) fn set_panic_in_name(on: bool) {
+    PANIC_IN_NAME.with(|flag| flag.set(on));
+}
+
 /// A fake plugin to be driven.
 struct Toy;
 
 impl PackageManager for Toy {
     fn name(&self) -> &str {
+        // The shim has to contain this: a panic crossing `extern "C"` aborts the whole process.
+        if PANIC_IN_NAME.with(Cell::get) {
+            panic!("the toy plugin was told to panic in name()");
+        }
         "toy"
     }
 
