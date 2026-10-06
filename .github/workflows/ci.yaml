@@ -90,20 +90,25 @@ jobs:
       # Only normal edges count: dev-dependencies (crate-plugin-kit, used by integration
       # tests) and build-dependencies **do not exist for plugin authors**, so they must not
       # count against this promise.
+      #
+      # Workspace crates are not the cost this guards: `pmpx-plugin` depends on `pmpx-plugin-abi`
+      # on purpose, and that crate is checked by this same loop. What must never appear is a
+      # crate from outside the workspace -- a registry package has no path in `cargo tree`
+      # output, which is what the filter below keys on.
       - name: the contract crates must stay dependency-free
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           for crate in pmpx-plugin pmpx-plugin-abi pmpx-detect; do
-            deps=$(cargo tree -p "$crate" -e normal --prefix none 2>/dev/null \
-              | awk '{print $1}' | sort -u | grep -vx "$crate" || true)
-            if [ -n "$deps" ]; then
-              echo "::error::$crate promises zero dependencies, but the normal dependency tree contains:"
-              echo "$deps"
+            external=$(cargo tree -p "$crate" -e normal --prefix none 2>/dev/null \
+              | grep -vF '(' | awk '{print $1}' | sort -u | grep -vx "$crate" || true)
+            if [ -n "$external" ]; then
+              echo "::error::$crate must depend on nothing outside this workspace, but it does:"
+              echo "$external"
               exit 1
             fi
-            echo "$crate has zero normal dependencies"
+            echo "$crate depends on nothing outside this workspace"
           done
 
       # `unsafe` is a promise about *where* the raw pointers live, not a style preference. The ABI
