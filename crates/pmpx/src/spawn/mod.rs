@@ -11,9 +11,10 @@
 //! appending `.exe`, it does no PATHEXT resolution. On Windows npm / pnpm / yarn / bun are
 //! all `.cmd` shims (`pnpm.cmd`).
 //!
-//! So the real path is resolved first ([`resolve`]), then spawned by kind ([`command_for`]):
-//! `.cmd` / `.bat` go to `cmd /d /s /c`, `.ps1` goes to `pwsh -NoProfile -File`, and a failed
-//! resolution is an error (exit code 3) that lists the near-matching names in PATH.
+//! So the real path is resolved first ([`resolve`]), then spawned by kind ([`command_for`]): a
+//! `.cmd` / `.bat` is handed to `std::process`, which builds the `cmd.exe` line for it, `.ps1`
+//! goes to `pwsh -NoProfile -File`, and a failed resolution is an error (exit code 3) that lists
+//! the near-matching names in PATH.
 
 use std::path::Path;
 
@@ -25,7 +26,6 @@ use crate::style;
 
 mod command;
 mod not_found;
-mod quoting;
 mod resolve;
 
 pub use command::command_for;
@@ -178,8 +178,8 @@ mod tests {
 
     /// Really run a `.cmd` and confirm the arguments arrive.
     ///
-    /// cmd's quoting rules are a separate implementation, so the only way to confirm is to
-    /// run it for real.
+    /// A batch file is started by `std`, whose `cmd.exe` line is a separate implementation, so
+    /// the only way to confirm the arguments reach it is to run it for real.
     #[cfg(windows)]
     #[test]
     fn a_cmd_shim_really_runs_and_receives_its_args() {
@@ -199,8 +199,7 @@ mod tests {
         assert_eq!(got.trim(), "add serde");
     }
 
-    /// A `.cmd` has to run from a path with spaces too -- that is what the double quoting
-    /// and `/s` are for.
+    /// A `.cmd` has to run from a path with spaces too.
     #[cfg(windows)]
     #[test]
     fn a_cmd_shim_in_a_path_with_spaces_still_runs() {
@@ -215,7 +214,7 @@ mod tests {
         assert_eq!(
             run(&spec, tmp.path()).unwrap(),
             0,
-            "a path with spaces must work -- that is why the double quoting exists"
+            "a path with spaces must work"
         );
     }
 
@@ -251,5 +250,46 @@ mod tests {
 
         let spec = CommandSpec::new(shim.as_os_str());
         assert_eq!(run(&spec, tmp.path()).unwrap(), 42);
+    }
+
+    /// `&`, `|`, `>` and `^` are separators, pipes, redirections and escapes to `cmd.exe`, which
+    /// re-parses the whole line before the batch file runs. A hand-built line therefore handed
+    /// the backend `a` instead of `a&b` (and ran the tail as a second command), broke on `a|b`,
+    /// and swallowed the caret -- while `pmpx exec` / `run` forward the user's own argv.
+    ///
+    /// The readout quotes `%~1` on purpose: an unquoted `%~1` in the *shim* would be re-parsed
+    /// by cmd as well, which would test the shim instead of the argument. The `%VAR%` case
+    /// cannot be asserted this way at all -- cmd expands `%…%` in the shim's own line too -- so
+    /// it was checked against a native child that dumps its argv (`%TEMP%` arrives literally).
+    #[cfg(windows)]
+    #[test]
+    fn cmd_metacharacters_survive_into_a_shim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_file = tmp.path().join("got.txt");
+        let shim = tmp.path().join("probe.cmd");
+        std::fs::write(
+            &shim,
+            format!(
+                "@echo off\r\necho \"[%~1]\" > \"{}\"\r\n",
+                out_file.display()
+            ),
+        )
+        .unwrap();
+
+        for arg in ["a&b", "a|b", "a>b", "^caret"] {
+            let spec = CommandSpec::new(shim.as_os_str()).arg(arg);
+            assert_eq!(
+                run(&spec, tmp.path()).unwrap(),
+                0,
+                "the shim failed on {arg}"
+            );
+
+            let got = std::fs::read_to_string(&out_file).unwrap();
+            assert_eq!(
+                got.trim(),
+                format!("\"[{arg}]\""),
+                "cmd re-parsed the argument {arg}"
+            );
+        }
     }
 }

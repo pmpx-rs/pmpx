@@ -1,17 +1,15 @@
 //! Building the [`Command`] for a program that has already been resolved.
 //!
 //! Kept apart from [`super::run`] for testability: tests need `output()` to capture output, while
-//! `run` inherits stdio. The platform differences all live here: a `.cmd` / `.bat` goes through
-//! `cmd /d /s /c`, a `.ps1` through `pwsh -NoProfile -File`, and everything else is spawned
-//! directly.
+//! `run` inherits stdio. One platform difference is left -- a `.ps1` goes through
+//! `pwsh -NoProfile -File`. Why `.cmd` / `.bat` is deliberately *not* one of them is the one
+//! thing worth reading in [`command_for`].
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use pmpx_plugin::CommandSpec;
 
-#[cfg(windows)]
-use super::quoting::cmd_raw_command_line;
 use super::resolve::{resolve, ProgramKind};
 use crate::error::Result;
 
@@ -28,45 +26,20 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
     let cwd = spec.cwd.as_deref().unwrap_or(cwd);
 
     let mut cmd = match resolved.kind {
-        ProgramKind::Native => {
+        // A batch file is started by handing the *file* to `Command`: std knows that a
+        // `.cmd` / `.bat` cannot be started by `CreateProcess` directly, and builds the
+        // `cmd.exe` line for it -- forcing quotes around every batch argument, doubling inner
+        // quotes and neutralising `%`.
+        //
+        // Building that line here instead was measurably wrong. `cmd.exe` re-parses the whole
+        // line before the batch file ever runs, so a hand-built line delivered `a&b` as `a`
+        // (the tail ran as a second command), broke the line on `a|b`, expanded `%TEMP%` into
+        // a path and ate the caret of `^caret` -- while `pmpx exec` / `run` forward the user's
+        // own argv.
+        ProgramKind::Native | ProgramKind::CmdShim => {
             let mut c = Command::new(&resolved.program);
             c.args(&spec.args);
             c
-        }
-
-        ProgramKind::CmdShim => {
-            #[cfg(windows)]
-            {
-                // The whole command line has to be built here, and it must go through
-                // `raw_arg`.
-                //
-                // Passing the arguments one by one does not work: `cmd /c` has its own
-                // quoting rules and strips the leading and trailing quotes of the whole
-                // string under some conditions, so it has to be
-                // `cmd /d /s /c "<path> <args>"` -- the outer pair is left there for `/s`
-                // to strip.
-                // Passing the built string through `arg` does not work either: it adds
-                // another layer of quotes and escapes our `"` into `\"`, which cmd no longer
-                // recognises. This needs verbatim delivery, which is what `raw_arg` exists
-                // for.
-                use std::os::windows::process::CommandExt;
-
-                let mut c = Command::new("cmd");
-                c.raw_arg(cmd_raw_command_line(&resolved.program, &spec.args));
-                c
-            }
-
-            #[cfg(not(windows))]
-            {
-                // `.cmd` / `.bat` are Windows-only forms and there is no cmd.exe here.
-                // But `kind_of` still classifies them as CmdShim (the classification is
-                // cross-platform), so this branch has to exist. If it is really reached, the
-                // program is started as an ordinary program -- it will fail with a system
-                // error such as Exec format error, and that is the truth.
-                let mut c = Command::new(&resolved.program);
-                c.args(&spec.args);
-                c
-            }
         }
 
         ProgramKind::PowerShellShim => {
