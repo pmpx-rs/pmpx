@@ -44,34 +44,92 @@ fn a_panicking_plugin_does_not_take_the_host_down() {
     assert_eq!(code, abi::PMPX_ERR_INTERNAL);
 }
 
-/// A length with no array behind it is rejected rather than dereferenced.
+/// A length with no array behind it is rejected rather than dereferenced -- **for every array in
+/// the context**, not just the two that existed first.
 ///
-/// Defence in depth -- `pmpx` itself always passes real pointers -- but the shell exists precisely
-/// so the two sides need not trust each other, and a null pointer with a non-zero length is
-/// undefined behaviour rather than an empty input.
+/// Defence in depth: `pmpx` itself always passes real pointers, but the shell exists precisely so
+/// the two sides need not trust each other, and a null pointer with a non-zero length is undefined
+/// behaviour rather than an empty input. `files`, `pins`, `scripts` and `config_paths` were added
+/// to the context later, which is exactly how one of them came to be missing from this check.
 #[test]
 fn a_null_array_with_a_length_is_rejected() {
-    let e = entry();
-    let mut out = std::mem::MaybeUninit::<pmpx_plugin::abi::PmpxCommand>::uninit();
+    /// Break one array of the context the way a buggy host would.
+    type Break = fn(&mut abi::PmpxContextV1);
 
-    for (matched_len, args_len) in [(0, 1), (1, 0)] {
-        let mut ctx = crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
-        let raw = ctx.raw_mut();
-        raw.matched = std::ptr::null();
-        raw.matched_len = matched_len;
-        raw.args = std::ptr::null();
-        raw.args_len = args_len;
+    let breaks: [(&str, Break); 6] = [
+        ("matched", |c| {
+            c.matched = std::ptr::null();
+            c.matched_len = 1;
+        }),
+        ("args", |c| {
+            c.args = std::ptr::null();
+            c.args_len = 1;
+        }),
+        ("pins", |c| {
+            c.pins = std::ptr::null();
+            c.pins_len = 1;
+        }),
+        ("scripts", |c| {
+            c.scripts = std::ptr::null();
+            c.scripts_len = 1;
+        }),
+        ("config_paths", |c| {
+            c.config_paths = std::ptr::null();
+            c.config_paths_len = 1;
+        }),
+        ("files", |c| {
+            c.files = std::ptr::null();
+            c.files_len = 1;
+        }),
+    ];
 
-        // SAFETY: `out` is writable, and the null arrays are exactly what is being rejected --
-        // nothing on this side reads them.
-        let code = unsafe { (e.command)(ctx.ptr(), out.as_mut_ptr()) };
+    for (name, broken) in breaks {
+        let answer = call_with(broken);
 
         assert_eq!(
-            code,
+            answer,
             abi::PMPX_ERR_INVALID_ARGS,
-            "matched_len {matched_len}, args_len {args_len} should be rejected"
+            "a null {name} array with a length should be rejected"
         );
     }
+}
+
+/// The same for a length no real context could have: reading it is not the risk (the pointer may be
+/// real) -- allocating for it is, and `Vec::with_capacity(usize::MAX)` aborts.
+#[test]
+fn an_implausible_length_is_rejected() {
+    type Break = fn(&mut abi::PmpxContextV1);
+
+    let breaks: [(&str, Break); 6] = [
+        ("matched", |c| c.matched_len = usize::MAX),
+        ("args", |c| c.args_len = usize::MAX),
+        ("pins", |c| c.pins_len = usize::MAX),
+        ("scripts", |c| c.scripts_len = usize::MAX),
+        ("config_paths", |c| c.config_paths_len = usize::MAX),
+        ("files", |c| c.files_len = usize::MAX),
+    ];
+
+    for (name, broken) in breaks {
+        let answer = call_with(broken);
+
+        assert_eq!(
+            answer,
+            abi::PMPX_ERR_INVALID_ARGS,
+            "an implausible {name} length should be rejected"
+        );
+    }
+}
+
+/// Call `command` once with a context that `break_it` has damaged.
+fn call_with(break_it: fn(&mut abi::PmpxContextV1)) -> u32 {
+    let e = entry();
+    let mut ctx = crate::support::context("/proj", &[], Verb::Install.to_abi(), &[]);
+    break_it(ctx.raw_mut());
+    let mut out = std::mem::MaybeUninit::<pmpx_plugin::abi::PmpxCommand>::uninit();
+
+    // SAFETY: `out` is writable, and whatever was broken is what the call has to reject: the shell
+    // answers before dereferencing any of it.
+    unsafe { (e.command)(ctx.ptr(), out.as_mut_ptr()) }
 }
 
 /// A context the host built smaller than this plugin knows is refused rather than read past its

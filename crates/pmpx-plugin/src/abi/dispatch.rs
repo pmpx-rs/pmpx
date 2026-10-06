@@ -21,6 +21,14 @@ use super::types::{
 /// pair of quotes.
 pub const PANIC_MARKER: &str = "<the plugin panicked>";
 
+/// The most elements any one context array may hold.
+///
+/// A length is the host's word and this shell does not trust it: `usize::MAX` would abort inside
+/// `Vec::with_capacity` before the first element was read, which is a crash the plugin could not
+/// explain away. A real context holds a handful of entries; this is the same ceiling the host puts
+/// on the arguments a plugin hands back.
+const MAX_CONTEXT_ITEMS: usize = 4096;
+
 /// Write a [`CommandSpec`] in its cross-boundary form, with the memory allocated by this side.
 /// # Safety
 /// `out` must point at a writable [`PmpxCommand`].
@@ -106,16 +114,22 @@ pub unsafe fn dispatch_command(
     // A length without an array is not "empty": reading it would be undefined behaviour, and a
     // bogus length would allocate before the first element is even touched. `pmpx` always passes a
     // real pointer -- it builds every array from a `Vec` -- but the whole point of this shell is not
-    // to assume that. (A length *larger* than the caller's array cannot be detected here, which is
-    // why the `command` contract puts that on the caller.)
+    // to assume that. (A length *larger* than the caller's actual array cannot be detected here,
+    // which is why the `command` contract puts that on the caller; what *can* be caught is a length
+    // no real context would have, which would otherwise abort inside `Vec::with_capacity` -- a crash
+    // the plugin could not explain.)
     let arrays = [
         (context.matched_len, context.matched.cast::<()>()),
         (context.args_len, context.args.cast::<()>()),
         (context.pins_len, context.pins.cast::<()>()),
         (context.scripts_len, context.scripts.cast::<()>()),
         (context.config_paths_len, context.config_paths.cast::<()>()),
+        (context.files_len, context.files.cast::<()>()),
     ];
-    if arrays.iter().any(|(len, ptr)| *len > 0 && ptr.is_null()) {
+    if arrays
+        .iter()
+        .any(|(len, ptr)| *len > 0 && (ptr.is_null() || *len > MAX_CONTEXT_ITEMS))
+    {
         return PMPX_ERR_INVALID_ARGS;
     }
 
