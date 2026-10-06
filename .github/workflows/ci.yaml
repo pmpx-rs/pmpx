@@ -217,15 +217,22 @@ jobs:
             -I crates/pmpx-plugin-abi/include "$RUNNER_TEMP/abi-header.c"
           echo "the C header compiles and its layout assertions hold"
 
-      # Workspace-internal dependencies must declare **both** `path` and `version`. With
-      # only path it builds locally, but at publish time that dependency resolves to the
-      # version on the registry and package verification necessarily fails.
+      # Workspace-internal dependencies must declare **both** `path` and `version`.
+      #
+      # For a normal or build dependency the reason is publishing: only a path builds locally,
+      # but the published manifest resolves that dependency from the registry, so package
+      # verification necessarily fails.
+      #
+      # Dev-dependencies are exempt (`kind != "dev"`): cargo strips a path-only dev-dependency when
+      # packaging, so it cannot break publishing. Counting them is worse than useless -- giving
+      # `pmpx-plugin`'s dev-dependency on `pmpx-loader` a version would add a publish-order edge
+      # (loader before plugin) to satisfy a rule that does not apply to it.
       - name: Workspace deps declare a version
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           missing=$(cargo metadata --no-deps --format-version 1 \
-            | jq -r '.packages[].dependencies[] | select(.path != null and .req == "*") | .name')
+            | jq -r '.packages[].dependencies[] | select(.kind != "dev" and .path != null and .req == "*") | .name')
           if [ -n "$missing" ]; then
             echo "::error::these workspace-internal dependencies declare only path, no version:"
             echo "$missing"
