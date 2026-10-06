@@ -20,6 +20,14 @@ use core::ffi::c_void;
 /// capability lookup.
 pub const PMPX_ABI_MAJOR: u32 = 3;
 
+/// The name of the single entry symbol a plugin exports: `extern "C" fn() -> *const PmpxPlugin`.
+///
+/// The version in the name tracks the **root struct's layout**, not the ABI's keys: a host that
+/// finds no such symbol reports "this plugin was built for another contract" instead of reading a
+/// struct whose fields moved. Adding a capability or a key never changes it; changing
+/// [`PmpxPlugin`] does.
+pub const PMPX_ENTRY_SYMBOL: &str = "pmpx_plugin_entry_v3";
+
 /// The most elements any one context array or map may have.
 ///
 /// A length is one side's word and the other side does not trust it: a length this size is refused
@@ -218,6 +226,12 @@ pub struct PmpxContext {
     /// As [`PmpxContext::count`].
     pub name:
         unsafe extern "C" fn(context: *const PmpxContext, key: PmpxStr, index: usize) -> PmpxStr,
+
+    /// The host's own state, so that the three accessors above can find the data they answer from.
+    ///
+    /// **A plugin must never read this**, and nothing about its contents is part of the ABI: it is
+    /// how a host avoids a process-wide global to answer "which call is this".
+    pub opaque: *const c_void,
 }
 
 /// The host, as the plugin sees it: a lookup for the host's capabilities.

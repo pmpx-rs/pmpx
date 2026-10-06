@@ -14,6 +14,11 @@ categories = ["development-tools"]
 
 # Zero dependencies, deliberately: this is the layer that both sides of the `dlopen` boundary
 # compile against, and it is meant to be translatable to C by hand (see `include/`).
+[features]
+# `OsStr` <-> bytes, for the two sides that build and read arguments and paths. Off by default so
+# this crate stays `no_std`: a plugin written in C never needs it, and neither does the wire format.
+std = []
+
 [dependencies]
 
 [lints.rust]

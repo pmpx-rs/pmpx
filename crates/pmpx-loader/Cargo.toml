@@ -1,0 +1,27 @@
+[package]
+name = "pmpx-loader"
+description = "Loads a pmpx plugin and calls it across the C ABI: the host side of the contract."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["plugin", "abi", "dlopen", "loading"]
+categories = ["development-tools"]
+
+[dependencies]
+# The wire format. `std` is turned on here (and in the plugin shell) for the `OsStr` conversions; the
+# crate's own default is `no_std`, because a plugin written in C does not need them.
+pmpx-plugin-abi = { workspace = true, features = ["std"] }
+
+# `dlopen`, in a crate small enough to audit. Deliberately **not** `crate-plugin-kit`: the kit
+# brings registry access, prebuilt-vs-source policy and install locks, none of which belong in the
+# ABI layer -- it takes a library path, not a plugin name.
+libloading = "0.9"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"

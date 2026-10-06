@@ -3,6 +3,7 @@
 abi_major = 3
 max_items = 4096
 pointer_bytes = 8
+entry_symbol = "pmpx_plugin_entry_v3"
 
 keys = [
   "args",
@@ -61,7 +62,7 @@ fields = [
 ]
 [[struct]]
 name = "PmpxContext"
-size = 48
+size = 56
 align = 8
 fields = [
   "size:0",
@@ -71,6 +72,7 @@ fields = [
   "count:24",
   "get:32",
   "name:40",
+  "opaque:48",
 ]
 [[struct]]
 name = "PmpxHost"

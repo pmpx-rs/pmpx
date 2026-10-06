@@ -29,11 +29,11 @@ use crate::caps::{PMPX_CAPS, PMPX_REQUIRED_CAPS};
 use crate::keys::PMPX_KEYS;
 use crate::types::{
     PmpxAttach, PmpxCommand, PmpxCommandCap, PmpxContext, PmpxHost, PmpxIdentity, PmpxLog,
-    PmpxPlugin, PmpxSlice, PmpxStr, PMPX_ABI_MAJOR, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS,
-    PMPX_ERR_UNSUPPORTED_VERB, PMPX_LEVEL_DEBUG, PMPX_LEVEL_ERROR, PMPX_LEVEL_INFO,
-    PMPX_LEVEL_WARN, PMPX_MAX_ITEMS, PMPX_OK, PMPX_REASON_EXPLICIT, PMPX_REASON_PINNED,
-    PMPX_REASON_SCORED, PMPX_VERB_BUILD, PMPX_VERB_EXEC, PMPX_VERB_INSTALL, PMPX_VERB_REMOVE,
-    PMPX_VERB_RUN, PMPX_VERB_TEST, PMPX_VERB_UPDATE,
+    PmpxPlugin, PmpxSlice, PmpxStr, PMPX_ABI_MAJOR, PMPX_ENTRY_SYMBOL, PMPX_ERR_INTERNAL,
+    PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_LEVEL_DEBUG, PMPX_LEVEL_ERROR,
+    PMPX_LEVEL_INFO, PMPX_LEVEL_WARN, PMPX_MAX_ITEMS, PMPX_OK, PMPX_REASON_EXPLICIT,
+    PMPX_REASON_PINNED, PMPX_REASON_SCORED, PMPX_VERB_BUILD, PMPX_VERB_EXEC, PMPX_VERB_INSTALL,
+    PMPX_VERB_REMOVE, PMPX_VERB_RUN, PMPX_VERB_TEST, PMPX_VERB_UPDATE,
 };
 
 /// One field of a struct, and where it starts.
@@ -86,6 +86,7 @@ const SPECS: &[Spec] = &[
             field("count", offset_of!(PmpxContext, count)),
             field("get", offset_of!(PmpxContext, get)),
             field("name", offset_of!(PmpxContext, name)),
+            field("opaque", offset_of!(PmpxContext, opaque)),
         ],
     },
     Spec {
@@ -251,6 +252,7 @@ pub fn write_snapshot(out: &mut impl Write) -> fmt::Result {
     writeln!(out, "abi_major = {PMPX_ABI_MAJOR}")?;
     writeln!(out, "max_items = {PMPX_MAX_ITEMS}")?;
     writeln!(out, "pointer_bytes = {}", size_of::<usize>())?;
+    writeln!(out, "entry_symbol = \"{}\"", PMPX_ENTRY_SYMBOL)?;
     writeln!(out)?;
 
     write_list(out, "keys", PMPX_KEYS.iter().map(|(key, _)| *key))?;
@@ -301,6 +303,11 @@ pub fn write_c_header(out: &mut impl Write) -> fmt::Result {
     writeln!(out, "#endif")?;
     writeln!(out)?;
     writeln!(out, "#define PMPX_ABI_MAJOR {PMPX_ABI_MAJOR}u")?;
+    writeln!(
+        out,
+        "/* The one symbol a plugin exports: extern const PmpxPlugin *{}(); */",
+        PMPX_ENTRY_SYMBOL
+    )?;
     writeln!(out, "#define PMPX_MAX_ITEMS {PMPX_MAX_ITEMS}u")?;
     writeln!(out)?;
 
@@ -359,6 +366,10 @@ pub fn write_c_header(out: &mut impl Write) -> fmt::Result {
     writeln!(
         out,
         "    PmpxStr (*name)(const PmpxContext *context, PmpxStr key, size_t index);"
+    )?;
+    writeln!(
+        out,
+        "    const void *opaque; /* the host's own state; a plugin must not read it */"
     )?;
     writeln!(out, "}};")?;
     writeln!(out)?;

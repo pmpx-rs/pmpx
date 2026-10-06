@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 #define PMPX_ABI_MAJOR 3u
+/* The one symbol a plugin exports: extern const PmpxPlugin *pmpx_plugin_entry_v3(); */
 #define PMPX_MAX_ITEMS 4096u
 
 /* ---- The numbers ---- */
@@ -70,6 +71,7 @@ struct PmpxContext {
     size_t (*count)(const PmpxContext *context, PmpxStr key);
     PmpxStr (*get)(const PmpxContext *context, PmpxStr key, size_t index);
     PmpxStr (*name)(const PmpxContext *context, PmpxStr key, size_t index);
+    const void *opaque; /* the host's own state; a plugin must not read it */
 };
 
 struct PmpxHost {
@@ -124,7 +126,7 @@ _Static_assert(offsetof(PmpxStr, len) == 8, "PmpxStr.len");
 _Static_assert(sizeof(PmpxStrSlice) == 16, "PmpxStrSlice size");
 _Static_assert(offsetof(PmpxStrSlice, ptr) == 0, "PmpxStrSlice.ptr");
 _Static_assert(offsetof(PmpxStrSlice, len) == 8, "PmpxStrSlice.len");
-_Static_assert(sizeof(PmpxContext) == 48, "PmpxContext size");
+_Static_assert(sizeof(PmpxContext) == 56, "PmpxContext size");
 _Static_assert(offsetof(PmpxContext, size) == 0, "PmpxContext.size");
 _Static_assert(offsetof(PmpxContext, verb) == 8, "PmpxContext.verb");
 _Static_assert(offsetof(PmpxContext, reason) == 12, "PmpxContext.reason");
@@ -132,6 +134,7 @@ _Static_assert(offsetof(PmpxContext, score) == 16, "PmpxContext.score");
 _Static_assert(offsetof(PmpxContext, count) == 24, "PmpxContext.count");
 _Static_assert(offsetof(PmpxContext, get) == 32, "PmpxContext.get");
 _Static_assert(offsetof(PmpxContext, name) == 40, "PmpxContext.name");
+_Static_assert(offsetof(PmpxContext, opaque) == 48, "PmpxContext.opaque");
 _Static_assert(sizeof(PmpxHost) == 24, "PmpxHost size");
 _Static_assert(offsetof(PmpxHost, abi_major) == 0, "PmpxHost.abi_major");
 _Static_assert(offsetof(PmpxHost, size) == 8, "PmpxHost.size");

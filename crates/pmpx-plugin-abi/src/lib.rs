@@ -35,16 +35,37 @@
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// The crate is `no_std`; the `std` feature is what opts a *crate that links it* into the two OS
+// conversions, without pulling `std` into the wire format itself.
+#[cfg(feature = "std")]
+extern crate std;
+
 pub mod caps;
 pub mod keys;
+#[cfg(feature = "std")]
+mod os;
 pub mod surface;
 mod types;
 
+#[cfg(feature = "std")]
+pub use os::{bytes_to_os, os_to_bytes};
+
+// A flat namespace on purpose: a consumer (the loader, a plugin shell, a test fixture) should be
+// able to write `pmpx_plugin_abi::PMPX_KEY_ARGS` without knowing which module it lives in.
+pub use caps::{
+    PMPX_CAPS, PMPX_CAP_ATTACH, PMPX_CAP_COMMAND, PMPX_CAP_IDENTITY, PMPX_CAP_LOG,
+    PMPX_REQUIRED_CAPS,
+};
+pub use keys::{
+    PMPX_KEYS, PMPX_KEY_ARGS, PMPX_KEY_CONFIG_PIN, PMPX_KEY_FILE_PREFIX,
+    PMPX_KEY_PROJECT_CONFIG_FILES, PMPX_KEY_PROJECT_MATCHED, PMPX_KEY_PROJECT_ROOT,
+    PMPX_KEY_PROJECT_START_DIR,
+};
 pub use types::{
     PmpxAttach, PmpxCommand, PmpxCommandCap, PmpxContext, PmpxHost, PmpxIdentity, PmpxLog,
-    PmpxPlugin, PmpxSlice, PmpxStr, PMPX_ABI_MAJOR, PMPX_ERR_INTERNAL, PMPX_ERR_INVALID_ARGS,
-    PMPX_ERR_UNSUPPORTED_VERB, PMPX_LEVEL_DEBUG, PMPX_LEVEL_ERROR, PMPX_LEVEL_INFO,
-    PMPX_LEVEL_WARN, PMPX_MAX_ITEMS, PMPX_OK, PMPX_REASON_EXPLICIT, PMPX_REASON_PINNED,
-    PMPX_REASON_SCORED, PMPX_VERB_BUILD, PMPX_VERB_EXEC, PMPX_VERB_INSTALL, PMPX_VERB_REMOVE,
-    PMPX_VERB_RUN, PMPX_VERB_TEST, PMPX_VERB_UPDATE,
+    PmpxPlugin, PmpxSlice, PmpxStr, PMPX_ABI_MAJOR, PMPX_ENTRY_SYMBOL, PMPX_ERR_INTERNAL,
+    PMPX_ERR_INVALID_ARGS, PMPX_ERR_UNSUPPORTED_VERB, PMPX_LEVEL_DEBUG, PMPX_LEVEL_ERROR,
+    PMPX_LEVEL_INFO, PMPX_LEVEL_WARN, PMPX_MAX_ITEMS, PMPX_OK, PMPX_REASON_EXPLICIT,
+    PMPX_REASON_PINNED, PMPX_REASON_SCORED, PMPX_VERB_BUILD, PMPX_VERB_EXEC, PMPX_VERB_INSTALL,
+    PMPX_VERB_REMOVE, PMPX_VERB_RUN, PMPX_VERB_TEST, PMPX_VERB_UPDATE,
 };

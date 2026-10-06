@@ -17,6 +17,11 @@ rust-version = "1.88"
 # so version is mandatory, and it must match [workspace.package] version exactly.
 pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.2.1" }
 
+# The raw ABI layer: `#[repr(C)]` data, keys and capabilities. Shared by the plugin shell, the host
+# loader and (later) the plugin-author test kit. `features = ["std"]` is added where it is wanted,
+# so the crate's own default stays `no_std`.
+pmpx-plugin-abi = { path = "crates/pmpx-plugin-abi", version = "0.2.1" }
+
 # General plugin management library. An external dependency, consumed by version, not by path.
 crate-plugin-kit = "0.2.0"
 

@@ -147,6 +147,9 @@ jobs:
           set -euo pipefail
           cargo package -p pmpx-plugin-abi --locked
           cargo package -p pmpx-plugin --locked
+          # `--list` only: `pmpx-loader` depends on `pmpx-plugin-abi` by path (not published yet), so
+          # full packaging would wait on a registry. The same reason `pmpx` is checked this way.
+          cargo package -p pmpx-loader --list
           cargo package -p pmpx --list
 
       # The ABI's two renderings are generated from the Rust definitions and committed, so that a
