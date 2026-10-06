@@ -9,11 +9,11 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::path::Path;
 
-use crate::error::PmpxError;
+use crate::error::EngineError;
 
 /// When nothing is found, say something that guides the next step: list the near-matching
 /// files in PATH -- that is far more useful than a bare "pnpm not found".
-pub(super) fn not_found_error(program: &OsStr) -> PmpxError {
+pub(super) fn not_found_error(program: &OsStr) -> EngineError {
     let wanted = program.to_string_lossy().to_ascii_lowercase();
     let near = near_misses(&wanted);
 
@@ -41,7 +41,7 @@ pub(super) fn not_found_error(program: &OsStr) -> PmpxError {
         );
     }
 
-    PmpxError::not_found(msg)
+    EngineError::not_found(msg)
 }
 
 /// Whether a file name in PATH counts as a "near candidate" for `wanted`.
@@ -85,7 +85,7 @@ fn near_misses(wanted_lower: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spawn::resolve::resolve;
+    use crate::resolve::resolve;
 
     // ---- near-miss classification --------------------------------------------
 

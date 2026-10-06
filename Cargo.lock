@@ -432,6 +432,7 @@ dependencies = [
  "directories",
  "flate2",
  "pmpx-detect",
+ "pmpx-engine",
  "pmpx-loader",
  "pmpx-plugin",
  "pmpx-project",
@@ -450,6 +451,14 @@ dependencies = [
 [[package]]
 name = "pmpx-detect"
 version = "0.2.1"
+
+[[package]]
+name = "pmpx-engine"
+version = "0.2.1"
+dependencies = [
+ "tempfile",
+ "which",
+]
 
 [[package]]
 name = "pmpx-loader"

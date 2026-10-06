@@ -1,0 +1,25 @@
+[package]
+name = "pmpx-engine"
+description = "Runs what a plugin answers: resolving the program, starting it, and reporting what happened."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["cli", "pmpx", "process"]
+categories = ["development-tools"]
+
+# Executing a command is a PATH lookup and a `CreateProcess`: `which` is the part that has to be
+# right on Windows (PATHEXT, `.cmd` shims), and it is a pure function of the environment.
+[dependencies]
+which = "8"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

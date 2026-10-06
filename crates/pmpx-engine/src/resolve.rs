@@ -13,7 +13,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use super::not_found::not_found_error;
-use crate::error::{PmpxError, Result};
+use crate::error::{EngineError, Result};
 
 /// The kind of backend executable that was resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,7 @@ pub fn resolve(program: &OsStr, cwd: &Path) -> Result<Resolved> {
         if candidate.is_file() {
             candidate
         } else {
-            return Err(PmpxError::not_found(format!(
+            return Err(EngineError::not_found(format!(
                 "cannot find {}: there is no file at {}.",
                 as_path.display(),
                 candidate.display()
@@ -171,7 +171,10 @@ mod tests {
         let p = tmp.path().join("nope").join("thing");
 
         let err = resolve(p.as_os_str(), tmp.path()).unwrap_err();
-        assert_eq!(err.exit_code(), crate::error::EXIT_NOT_FOUND);
+        assert!(
+            err.is_not_found(),
+            "a missing program is the setup kind: {err:?}"
+        );
         assert!(
             err.to_string().contains("nope"),
             "the message should name what it looked for: {err}"
@@ -187,14 +190,17 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_program_gives_exit_code_three() {
+    fn a_missing_program_is_reported_as_not_found() {
         let tmp = tempfile::tempdir().unwrap();
         let err = resolve(
             OsStr::new("pmpx-definitely-not-a-real-program-xyz"),
             tmp.path(),
         )
         .unwrap_err();
-        assert_eq!(err.exit_code(), crate::error::EXIT_NOT_FOUND);
+        assert!(
+            err.is_not_found(),
+            "a missing program is the setup kind: {err:?}"
+        );
     }
 
     /// `which` does PATHEXT resolution on Windows, which is how `pnpm` resolves to

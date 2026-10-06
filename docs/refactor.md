@@ -314,7 +314,7 @@ impl Engine {
 | 2 | `pmpx-plugin-abi` + `pmpx-plugin` v3：键、能力、C 头 | 一个 fixture 插件能用新外壳构建并加载；能力/键协商测试（缺必需能力、函数表过短、未知键、空数组、panic）全绿；C 头重新生成后逐字节一致 |
 | 3 | `pmpx-loader`：宿主侧 ABI，全部 | 现有的 shim 测试迁移到 loader；宿主侧 crate 里的 `unsafe` 数量为零 |
 | 4 | `pmpx-project` + `pmpx-detect`：纯决策 | 检测测试在**没有文件系统**的情况下运行（证据是数据）；今天的排序/pin/同分测试原样迁移；`pmpx-detect` 零依赖 —— **两步都已完成** |
-| 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出） |
+| 5 | `pmpx-engine`：设置、商店、执行、事件、门面 | 进程内测试断言 `Plan` 与 `Event` 序列；现有 CLI 套件不变通过（同一个二进制、同样的输出）—— **执行与事件已落地**，设置/商店/门面待做 |
 | 6 | `pmpx` CLI：薄外壳、`--explain`、`--json`、别名展开 | 端到端测试跑真实二进制；所有人类可见输出都在这个 crate；库依赖守卫通过 |
 | 7 | `pmpx-testkit` + `pmpx plugin new/test` | 插件能对着 fixture 目录、也能对着内存文件表，用真实检测完成测试，代码一屏写得下 |
 
@@ -325,7 +325,8 @@ impl Engine {
 - 迁移中按实际需要调整了三处文档原本的判断：`scripts` 彻底不进上下文（它是宿主的别名表，测试里现在有一条**反向断言**守着它）；`family` 的显示名搬进 CLI（`style::family_label`）；清单声明的 `abi` 降级为**诊断**——真正执法的是 loader 对插件自报主版本的检查，两者不一致时宿主警告而不拒绝（那正是"包装过期的安装"的样子）。
 - **第 4 步的 `pmpx-detect` 已完成**：`STRONG_SCORE`/`WEAK_SCORE`/`PIN_FLOOR`、计分、家族与插件的两层层级、每一种失败原因都搬了进去，宿主只剩一个适配器（`InstalledPlugin` → `Candidate`、目录 → `Presence`、两层配置 → pins 与排序表、`Reason` → 契约的 `SelectionReason`）。决策现在吃数据：`Presence` 只有一个方法，"这个文件在不在"，测试用一个名字集合回答，于是整套排序/pin/同分/失败测试**不需要文件系统**；另有一个集成测试连"问了哪些文件"都断言成声明的那些标记名。零依赖，并已加进 CI 的零依赖门。
 - **第 4 步的 `pmpx-project` 也已完成，`[scripts]` 同时落地**：`atomic_write`、`paths`（含两个环境变量覆盖）、`.pmpx.toml` 的分层合并、全局配置（含默认排序表）都搬进 crate 并保留各自的测试；宿主只剩 `pub use`。`[scripts]` 按 §5 的决定实现成**宿主侧别名**：`pmpx run <名字>` 先查合并后的表，命中就直接执行（不需要任何插件，也不需要检测），`--` 之后的参数追加给它，未命中才走插件路由。字符串形式的分词规则：空白分隔、`"`/`'` 成组、未闭合的引号取到行尾、**没有 shell**（`$VAR`、`&&`、管道都是普通字符，这是唯一能在三个平台一致的行为）。CLI 套件里加了 5 个端到端测试，其中一个专门验证"项目自己定义的名字不需要插件"，另一个验证"没有定义的名字照旧交给插件"。
-- 仍然待做：`pmpx-engine`、`pmpx-testkit`（第 5–7 步）、`hints.rs` 的删除或外置、`pmpx run` 的 argv 边界，以及发布时的 `pmpx-plugin` 版本号 0.2.1 → 0.3.0。
+- **第 5 步的执行半边已落地**：`pmpx-engine` 现在拥有"把答案变成进程"的全部机制——`resolve`（PATH/PATHEXT、`.cmd`/`.ps1` 的种类判定）、`command_for`（按种类选解释器、构建 `cmd.exe` 行）、`run`（继承 stdio、等待、把退出状态翻译成退出码）、以及 `EngineError`（"没有这个程序"与"有但起不来"是两件事）。它自己的 `Plan`/`Event` 类型让它**完全不依赖契约**：`Plan` 就三个字段，`Event` 是 `Resolved` / `Starting` / `Finished` / `Note` / `Error`，于是整条执行路径可以在**没有插件**的情况下测试（新增的 `a_run_reports_what_it_did_in_order` 断言完整事件序列）。宿主剩下 100 行的渲染器：把事件变成 `--debug` 的两条轨迹、"pmpx -> …"的宣告，以及两种提示；退出码翻译（`NotFound` → 3）也在那里。
+- 仍然待做：`pmpx-engine` 的设置/商店/门面半边、`pmpx-testkit`（第 6–7 步）、`hints.rs` 的删除或外置、`pmpx run` 的 argv 边界，以及发布时的 `pmpx-plugin` 版本号 0.2.1 → 0.3.0。
 
 回滚：第 3–7 步都是追加式搬迁，任何一步都可以在不碰 ABI 的前提下回退。第 2 步不可逆——它之后所有已发布插件都必须重编译，正如 `ABI_VERSION` 1 → 2 已经要求过一次的那样。
 

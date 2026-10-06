@@ -29,6 +29,9 @@ pmpx-detect.workspace = true
 # pmpx's own configuration files (.pmpx.toml layers, the global file, atomic writes).
 pmpx-project.workspace = true
 
+# Executing what a plugin answers: resolution, spawning, exit codes, and the events of a run.
+pmpx-engine.workspace = true
+
 # General plugin management library: install / load / cross-process lock / cache. An
 # external dependency, consumed by version.
 crate-plugin-kit.workspace = true

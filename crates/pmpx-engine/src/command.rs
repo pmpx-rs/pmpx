@@ -8,10 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use pmpx_plugin::CommandSpec;
+use crate::Plan;
 
 use super::resolve::{resolve, ProgramKind};
-use crate::error::{PmpxError, Result};
+use crate::error::{EngineError, Result};
 
 /// Build a [`Command`] for a [`Resolved`](super::resolve::Resolved) kind, without running it.
 ///
@@ -22,9 +22,9 @@ use crate::error::{PmpxError, Result};
 /// applied here rather than by every caller, so a plugin's `cwd` cannot silently depend on the
 /// caller remembering to apply it. It is also decided *before* the program is resolved, so a
 /// relative program is looked up in the directory the process will actually run in.
-pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
-    let cwd = spec.cwd.as_deref().unwrap_or(cwd);
-    let resolved = resolve(&spec.program, cwd)?;
+pub fn command_for(plan: &Plan, cwd: &Path) -> Result<Command> {
+    let cwd = plan.cwd.as_deref().unwrap_or(cwd);
+    let resolved = resolve(&plan.program, cwd)?;
 
     let mut cmd = match resolved.kind {
         // A batch file is started by handing the *file* to `Command`: std knows that a
@@ -39,7 +39,7 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
         // own argv.
         ProgramKind::Native | ProgramKind::CmdShim => {
             let mut c = Command::new(&resolved.program);
-            c.args(&spec.args);
+            c.args(&plan.args);
             c
         }
 
@@ -55,7 +55,7 @@ pub fn command_for(spec: &CommandSpec, cwd: &Path) -> Result<Command> {
             let interpreter = resolve_powershell()?;
             let mut c = Command::new(interpreter);
             c.arg("-NoProfile").arg("-File").arg(&resolved.program);
-            c.args(&spec.args);
+            c.args(&plan.args);
             c
         }
     };
@@ -81,7 +81,7 @@ fn resolve_powershell() -> Result<PathBuf> {
         }
     }
 
-    Err(PmpxError::not_found(
+    Err(EngineError::not_found(
         "pmpx runs .ps1 shims with PowerShell, and neither `pwsh` nor `powershell` is on PATH."
             .to_string(),
     ))
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn a_missing_program_fails_before_spawning() {
         let tmp = tempfile::tempdir().unwrap();
-        let spec = CommandSpec::new("pmpx-definitely-not-a-real-program-xyz");
+        let spec = Plan::new("pmpx-definitely-not-a-real-program-xyz");
 
         assert!(command_for(&spec, tmp.path()).is_err());
     }
@@ -106,7 +106,7 @@ mod tests {
         let outer = tempfile::tempdir().unwrap();
         let inner = tempfile::tempdir().unwrap();
 
-        let spec = CommandSpec::new("cargo").arg("--version").cwd(inner.path());
+        let spec = Plan::new("cargo").arg("--version").cwd(inner.path());
         let cmd = command_for(&spec, outer.path()).unwrap();
 
         assert_eq!(cmd.get_current_dir(), Some(inner.path()));
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn without_a_cwd_in_the_spec_the_callers_directory_is_used() {
         let outer = tempfile::tempdir().unwrap();
-        let spec = CommandSpec::new("cargo").arg("--version");
+        let spec = Plan::new("cargo").arg("--version");
 
         let cmd = command_for(&spec, outer.path()).unwrap();
         assert_eq!(cmd.get_current_dir(), Some(outer.path()));
