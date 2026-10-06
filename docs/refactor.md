@@ -341,6 +341,35 @@ impl Engine {
 - **顺带修正了 README 的作者指南**：真实的已发布插件（`pmpx-plugin-cargo`）是**纯 rlib + `pub fn create()`**，`export!` 由安装/打包时生成的 wrapper 调用；README 此前让作者自己在插件里写 `export!`，那会与 wrapper 的同名导出符号**重复定义**（链接期 LNK2005，本地安装时第一次暴露出来）。
 - 仍然待做：`--explain` / `--json`（第 6 步里唯一还没做的两项）。
 
+### 待办：一次代码审查留下的两条（中等以上）
+
+按"每个 commit 一条"的顺序执行，已完成的两条与额外发现见下。
+
+| # | 项 | 状态 |
+| --- | --- | --- |
+| 1 | `config set` 写前按类型校验 | **已完成**（`b349f23`）：写入前用 `GlobalConfig` 反序列化整份文档，失败即 `Usage` + "Nothing was written"；三个端到端测试（坏值被拒且文件未创建、好值写回读一致、未知键仍允许） |
+| 2 | `-C` 不再引入 Windows verbatim 路径 | **已完成**（`cf55717`）：改用 `discovery::normalize`（`canonicalize` 与 `std::path::absolute` 在 Windows 上都会给出 `\\?\…`，而那条路径会进入交给插件的上下文）；`normalize` 提为 `pub(crate)` 作为引擎唯一的路径归一 |
+| — | CI 从不编译 store 门控测试 | **已完成**（`db01982`）：工作区默认特性不含 `store`，因此 `pmpx-engine` 的 store 测试在 CI 里从不运行；现在多一步 `cargo test -p pmpx-engine --features store --locked`。这也是第 2 条第一次提交时带着失败断言溜过去的原因 |
+| 3 | CLI 仍直接命名 kit 类型做商店操作 | 待做，计划见下 |
+| 4 | `InstalledPlugin` 复制 `PluginInfo` 六字段并丢掉 `extra` | 待做，计划见下 |
+
+**#4（先做，定类型形状）**：`InstalledPlugin` 改为组合——
+```rust
+pub struct InstalledPlugin {
+    /// 清单读到的全部内容，宿主段落（`extra`）也在里面，不再丢掉。
+    pub info: PluginInfo,
+    /// family 保留为派生的 `Option<Family>`：`PluginInfo::family` 是 `Option<String>`，
+    /// 而 `plugin ls` 按 `Option<&Family>` 分组，改成 `info.family` 会让每次分组都分配。
+    pub family: Option<Family>,
+    pub strong: Vec<String>,
+    pub weak: Vec<String>,
+    pub wanted: Vec<String>,
+}
+```
+`name` / `crate_name` / `version` / `abi` / `dir` 改成访问器（`self.info.*`）。**改动面**：约 57 处访问点，分布在引擎的 `store/{mod,manifest,tests}.rs`、`detect.rs`、`session.rs` 与 CLI 的 `commands/{plugin,info,plugin_store,plugin_pin}.rs`、`app/mod.rs`。门禁：`cargo test --locked` + `cargo test -p pmpx-engine --features store --locked` + `clippy --all-targets -D warnings`。
+
+**#3（后做，搬操作）**：把商店操作与清单契约校验收进 `pmpx-engine::store`，让 CLI 不再命名 kit 类型（引擎文档 `lib.rs:63` 已经承诺"kit 只出现在这个模块"，目前 `plugin_store.rs` 13 处、`error.rs` 的 `From<KitError>`、`selfupdate/release.rs` 的 `TARGET_TRIPLE`/`parse_github_repo` 都还直接用它）。做法：`store` 增加 `install` / `update` / `uninstall` / `search` / `view` / `library_of(plugin)` / `vet(manifest) -> Result<(), String>`，CLI 只留消息与呈现；`selfupdate/release.rs` 那两个纯 helper 要么留在原处并把这句文档改准确，要么自己算 target triple。先做 #4 是因为 #3 的新代码应当一次性写在最终的类型形状上。
+
 回滚：第 3–7 步都是追加式搬迁，任何一步都可以在不碰 ABI 的前提下回退。第 2 步不可逆——它之后所有已发布插件都必须重编译，正如 `ABI_VERSION` 1 → 2 已经要求过一次的那样。
 
 ---
