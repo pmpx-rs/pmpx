@@ -122,6 +122,7 @@ $ pmpx run dev -- --port 3000
 | `-C, --dir <path>` | 在指定目录操作 |
 | `--no-walk-up` | 只看当前目录，不向上找项目根 |
 | `-q, --quiet` | 关掉 stderr 上的提示 |
+| `--debug` | 打印调试信息 |
 
 其它命令：`pmpx info`、`pmpx plugin ls|current|set|unset|add|rm|update|search|info`、
 `pmpx config get|set`、`pmpx completion <shell>`、`pmpx self update`。

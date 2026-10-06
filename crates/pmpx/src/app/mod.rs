@@ -4,6 +4,7 @@
 //! This file is the context itself -- everything one run reads once; [`flow`] is what a verb then
 //! does with it.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,7 @@ use pmpx_plugin::Family;
 
 use crate::cli::Cli;
 use crate::config::{GlobalConfig, MergedProjectConfig};
+use crate::debug;
 use crate::detect::{self, DetectFailure, FamilyScore, Selection};
 use crate::discovery::{self, StopReason, Walk};
 use crate::error::PmpxError;
@@ -53,9 +55,17 @@ pub struct Session {
 
 impl Session {
     /// Read config, scan plugins, walk up. Selects no plugin and loads no code.
+    ///
+    /// Every step here is a phase in the `--debug` trace: this is where a run spends the time
+    /// that is not the backend's, so it is the part that has to be attributable.
     pub fn open(args: &Cli) -> Result<Self> {
+        let t = debug::now();
         let start_dir = resolve_start_dir(args.dir.as_deref())?;
+        debug::done("session.start-dir", t, || start_dir.display().to_string());
+
+        let t = debug::now();
         let global = GlobalConfig::load()?;
+        debug::done("session.config", t, || "global config.toml");
 
         // `--no-walk-up` can only tighten `[discovery] walk_up`, never loosen it.
         let mut discovery_cfg = global.discovery.clone();
@@ -75,23 +85,59 @@ impl Session {
         kit_cfg.contract_version = env!("CARGO_PKG_VERSION").to_string();
 
         kit_cfg.prefer_prebuilt = global.plugin_store.effective_prefer_prebuilt();
+
+        let t = debug::now();
         let kit = CratePluginKit::<PmpxPluginV1>::new(kit_cfg).with_context(|| {
             format!(
                 "failed to initialise the plugin store: {}",
                 data_dir.display()
             )
         })?;
+        debug::done("session.store", t, || data_dir.display().to_string());
 
+        let t = debug::now();
         let plugins = PluginSet::load(&kit)?;
+        debug::done("session.plugins", t, || {
+            format!(
+                "{} installed, {} usable",
+                plugins.plugins.len(),
+                plugins.usable().count()
+            )
+        });
 
         // Walk up **once**. The path and the stop reason, the project root, and the config layers
         // are three views of the same traversal, so they are derived here instead of walking
         // again -- that also makes it impossible for them to disagree about where the walk stopped.
+        let t = debug::now();
         let walk = discovery::walk(&start_dir, &discovery_cfg);
+        debug::done("session.walk", t, || {
+            format!(
+                "{}, stopped because: {}",
+                crate::discovery::dirs(walk.dirs.len()),
+                walk.stopped.describe(discovery_cfg.max_depth)
+            )
+        });
 
-        let project_root = walk.project_root(|d| plugins.marks_root(d));
+        // The candidates are stat'ed one by one and the search stops at the first hit, so the
+        // count is the real cost of this phase -- reporting the walked directories instead
+        // would overstate it in a deep tree.
+        let t = debug::now();
+        let checked = Cell::new(0usize);
+        let project_root = walk.project_root(|d| {
+            checked.set(checked.get() + 1);
+            plugins.marks_root(d)
+        });
+        debug::done("session.root", t, || match &project_root {
+            Some(root) => format!("{} checked -> {}", checked.get(), root.display()),
+            None => format!("{} checked -> none", checked.get()),
+        });
+
+        let t = debug::now();
         let config_paths = walk.config_paths();
         let project = MergedProjectConfig::from_paths_near_to_far(&config_paths)?;
+        debug::done("session.project-conf", t, || {
+            format!("{} .pmpx.toml", project.sources.len())
+        });
 
         Ok(Self {
             start_dir,
@@ -141,7 +187,14 @@ impl Session {
             msg.push_str(&format!("\nInstalled plugins: {}", installed.join(", ")));
         }
 
+        // Only reached when nothing was detected, which is exactly when "how long did the
+        // search take" is worth having in the trace.
+        let t = debug::now();
         let hints = crate::hints::probe(&self.start_dir);
+        debug::done("hints.probe", t, || {
+            format!("{} families matched", hints.len())
+        });
+
         if !hints.is_empty() {
             msg.push_str("\n\nThese files look like:");
             for h in &hints {
@@ -209,6 +262,9 @@ impl Session {
     }
 
     /// Load the selected plugin.
+    ///
+    /// `dlopen` and the ABI checks happen here, so this is the phase that turns "which plugin"
+    /// into "code in this process" -- worth telling apart from detection in the trace.
     pub fn load_backend(&self, selection: &Selection) -> crate::error::Result<Backend> {
         let Some(plugin) = self.plugins.by_crate_name(&selection.crate_name) else {
             return Err(PmpxError::not_found(format!(
@@ -216,7 +272,15 @@ impl Session {
                 selection.crate_name
             )));
         };
-        Backend::load(&self.kit, plugin)
+
+        let t = debug::now();
+        let backend = Backend::load(&self.kit, plugin);
+        debug::done("backend.load", t, || match &backend {
+            Ok(_) => plugin.crate_name.clone(),
+            Err(e) => format!("{} FAILED: {e}", plugin.crate_name),
+        });
+
+        backend
     }
 }
 

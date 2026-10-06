@@ -16,6 +16,7 @@ use pmpx_plugin::Family;
 use super::failure::DetectFailure;
 use super::{score_all, FamilyScore, ScoredPlugin};
 use crate::config::{GlobalConfig, MergedProjectConfig};
+use crate::debug;
 use crate::plugins::PluginSet;
 
 /// The resolution result.
@@ -82,7 +83,31 @@ pub fn select(
 /// `families` is only consulted when `explicit` is `None`, so a caller going straight to `-p` may
 /// pass an empty map. The `-p` path still scores **the one named plugin**, because
 /// [`Selection::matched`] has to be filled there too.
+///
+/// The decision itself is [`decide`]; this wrapper only times it for the `--debug` trace.
 pub fn select_from_scores(
+    set: &PluginSet,
+    root: &Path,
+    families: &BTreeMap<Family, FamilyScore>,
+    merged: &MergedProjectConfig,
+    global: &GlobalConfig,
+    explicit: Option<&str>,
+) -> Result<Selection, DetectFailure> {
+    let t = debug::now();
+    let result = decide(set, root, families, merged, global, explicit);
+
+    // Both outcomes are reported: "nothing was selected, and it took 4ms to find that out" is
+    // as much part of the answer as the winner is.
+    debug::done("detect.decide", t, || match &result {
+        Ok(s) => format!("{} ({}, {} pts)", s.name, s.family.as_str(), s.score),
+        Err(f) => format!("nothing selected: {}", f.message()),
+    });
+
+    result
+}
+
+/// Pick a family, then a plugin inside it: the decision, with no trace around it.
+fn decide(
     set: &PluginSet,
     root: &Path,
     families: &BTreeMap<Family, FamilyScore>,

@@ -17,6 +17,7 @@ use std::path::Path;
 use pmpx_plugin::Family;
 
 use crate::config::MergedProjectConfig;
+use crate::debug;
 use crate::plugins::{InstalledPlugin, PluginSet};
 
 mod failure;
@@ -116,6 +117,7 @@ pub fn score_all(
     root: &Path,
     merged: &MergedProjectConfig,
 ) -> BTreeMap<Family, FamilyScore> {
+    let t = debug::now();
     let mut families: BTreeMap<Family, FamilyScore> = BTreeMap::new();
 
     for plugin in set.usable() {
@@ -164,6 +166,16 @@ pub fn score_all(
     for fs in families.values_mut() {
         fs.plugins.sort_by(|a, b| a.crate_name.cmp(&b.crate_name));
     }
+
+    // The marker count is the size of the job: one `exists()` per plugin per declared file,
+    // and every Node backend claims `package.json` again.
+    debug::done("detect.score", t, || {
+        format!(
+            "{} plugins, {} marker names",
+            set.usable().count(),
+            set.detect_names().len()
+        )
+    });
 
     families
 }

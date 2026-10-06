@@ -7,6 +7,7 @@ use std::path::Path;
 use pmpx_plugin::Verb;
 
 use super::Session;
+use crate::debug;
 use crate::error::{PmpxError, Result};
 use crate::runtime::BackendError;
 use crate::spawn;
@@ -53,7 +54,13 @@ pub fn run_verb(
 
     // The evidence the plugin is given is the evidence that selected it -- carried by the
     // resolution itself, not re-read from the filesystem here.
-    match backend.command(&root, &selection.matched, verb, args) {
+    let t = debug::now();
+    let answer = backend.command(&root, &selection.matched, verb, args);
+    // Pure mapping on the other side of the ABI: no file is read and no process is started
+    // here, so this is the cost of the call itself, not of what it decides.
+    debug::done("plugin.command", t, || verb.to_string());
+
+    match answer {
         Ok(Ok(spec)) => {
             announce(session.quiet, &spec);
             // A `cwd` the plugin set is applied inside `spawn`, so passing the project root here is

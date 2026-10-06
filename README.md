@@ -133,6 +133,7 @@ Global flags:
 | `-C, --dir <path>` | operate in this directory |
 | `--no-walk-up` | only look at the current directory |
 | `-q, --quiet` | suppress the hints on stderr |
+| `--debug` | print debug information for this run |
 
 Other commands: `pmpx info`, `pmpx plugin ls|current|set|unset|add|rm|update|search|info`,
 `pmpx config get|set`, `pmpx completion <shell>`, `pmpx self update`.

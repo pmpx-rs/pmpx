@@ -157,6 +157,58 @@ fn info_lists_every_candidate_and_score() {
 }
 
 // ---------------------------------------------------------------------------
+// `--debug`
+// ---------------------------------------------------------------------------
+
+/// The trace has to cover a whole run, phase by phase, and never touch stdout: pmpx's answer
+/// to "it feels slow" is only useful if it says which side the time went to.
+#[test]
+fn debug_traces_every_phase_on_stderr() {
+    let (_build, sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+
+    let out = sb.run(&["--debug", "build"]);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+
+    let err = stderr_of(&out);
+    for phase in [
+        "pmpx debug:",
+        "cli.parse",
+        "session.root",
+        "detect.score",
+        "detect.decide",
+        "backend.load",
+        "spawn.resolve",
+        "backend.run",
+        "total",
+    ] {
+        assert!(err.contains(phase), "the trace is missing {phase}:\n{err}");
+    }
+
+    // The backend inherits stdout, so the trace must not be there.
+    let stdout = stdout_of(&out);
+    assert!(!stdout.contains("pmpx debug:"), "{stdout}");
+}
+
+/// `--quiet` turns off the hints, not the trace: asking for a trace is the more explicit
+/// request of the two.
+#[test]
+fn quiet_does_not_turn_the_trace_off() {
+    let (_build, sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+
+    let out = sb.run(&["--quiet", "--debug", "build"]);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+
+    let err = stderr_of(&out);
+    assert!(err.contains("pmpx debug:"), "{err}");
+    assert!(
+        !err.contains("pmpx ->"),
+        "`--quiet` should still have suppressed the resolved command: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The exec fallback
 // ---------------------------------------------------------------------------
 

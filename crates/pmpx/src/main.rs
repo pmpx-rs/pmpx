@@ -10,6 +10,7 @@
 //! config.rs / discovery.rs            config reading and project root discovery
 //! plugins.rs / detect.rs / hints.rs   plugin manifests, resolution, hints with zero plugins
 //! runtime.rs / spawn.rs               load the selected plugin, start the process
+//! debug.rs                            `--debug`: where each of the above spent its time
 //! ```
 //!
 //! One hard rule: detection never loads any plugin code (`plugins.rs` only reads manifests)
@@ -22,6 +23,7 @@ mod app;
 mod cli;
 mod commands;
 mod config;
+mod debug;
 mod detect;
 mod discovery;
 mod error;
@@ -35,14 +37,32 @@ mod style;
 use clap::Parser;
 
 fn main() -> std::process::ExitCode {
+    // Before anything else can be timed: every phase reported below is measured from here,
+    // and the startup before the first of them (the dynamic loader, the C runtime) is what
+    // `total` covers but no phase can.
+    debug::mark_start();
+
     // The only thing that happens before the arguments are parsed. On Windows an update
     // cannot delete the binary it replaced while that binary is still running, so the
     // leftover `.old` is deleted on the next start instead -- silently, because a failure
     // only means "next time". It compiles to nothing on other platforms.
+    let t = debug::now();
     selfupdate::cleanup_stale_old();
+    debug::done("self-update", t, || "stale .old cleanup");
 
+    let t = debug::now();
     let args = cli::Cli::parse();
+
+    // The flag can only be read once parsing is done, which is why turning the trace on is a
+    // step of its own rather than something `mark_start` could have decided.
+    if args.debug {
+        debug::enable();
+        debug::header();
+    }
+    debug::done("cli.parse", t, || "argv -> Cli");
+
     let code = dispatch(&args);
+    debug::total(code);
     std::process::ExitCode::from(code)
 }
 

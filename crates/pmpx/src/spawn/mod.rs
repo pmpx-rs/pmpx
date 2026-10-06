@@ -19,6 +19,7 @@ use std::path::Path;
 
 use pmpx_plugin::CommandSpec;
 
+use crate::debug;
 use crate::error::{PmpxError, Result};
 use crate::style;
 
@@ -56,8 +57,23 @@ pub fn announce(spec: &CommandSpec) {
 /// different things, and `pmpx test` must be able to pass the backend's nonzero exit code
 /// through to the caller's script -- that is the only meaningful contract of this command.
 pub fn run(spec: &CommandSpec, cwd: &Path) -> Result<u8> {
-    let mut cmd = command_for(spec, cwd)?;
+    // Resolving the real path is a PATH lookup plus a stat, and failing it is exit code 3 --
+    // the two phases are timed apart so the trace can say which one the backend owns.
+    let t = debug::now();
+    let mut cmd = match command_for(spec, cwd) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            debug::done("spawn.resolve", t, || format!("failed: {e}"));
+            return Err(e);
+        }
+    };
+    debug::done("spawn.resolve", t, || {
+        spec.program.to_string_lossy().to_string()
+    });
 
+    // This is the backend's own runtime, from here until its process exits: usually the whole
+    // of what a user perceives as "pmpx is slow", and never pmpx's own time.
+    let t = debug::now();
     let status = cmd.status().map_err(|e| {
         PmpxError::Other(anyhow::anyhow!(e).context(format!(
             "failed to start {}",
@@ -65,7 +81,9 @@ pub fn run(spec: &CommandSpec, cwd: &Path) -> Result<u8> {
         )))
     })?;
 
-    Ok(exit_code_of(status))
+    let code = exit_code_of(status);
+    debug::done("backend.run", t, || format!("exit {code}"));
+    Ok(code)
 }
 
 /// Translate an `ExitStatus` into a process exit code.

@@ -37,6 +37,12 @@ pub struct Cli {
     #[arg(short = 'q', long = "quiet", global = true)]
     pub quiet: bool,
 
+    /// Print debug information for this run
+    ///
+    /// It goes to stderr, and `--quiet` does not turn it off.
+    #[arg(long = "debug", global = true)]
+    pub debug: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
