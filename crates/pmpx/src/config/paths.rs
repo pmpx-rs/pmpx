@@ -16,6 +16,18 @@ pub const ENV_DATA_DIR: &str = "PMPX_DATA_DIR";
 
 /// Path of the global config file (the config directory differs per platform; `directories` decides).
 /// [`ENV_CONFIG_DIR`] overrides it wholesale, and that is a **directory** rather than a file.
+///
+/// Where that lands, in full:
+///
+/// | Platform | File |
+/// | --- | --- |
+/// | Linux | `$XDG_CONFIG_HOME/pmpx/config.toml` (`~/.config/pmpx/config.toml` by default) |
+/// | macOS | `~/Library/Application Support/pmpx/config.toml` |
+/// | Windows | `%APPDATA%\pmpx\config\config.toml` |
+///
+/// The doubled `config` on Windows comes from `ProjectDirs`' layout (`RoamingAppData\<app>\config`),
+/// and it is left as it is on purpose: released versions of pmpx read that file, so tidying it up
+/// would silently move every Windows user's configuration.
 pub fn global_config_path() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os(ENV_CONFIG_DIR) {
         return Ok(PathBuf::from(dir).join("config.toml"));

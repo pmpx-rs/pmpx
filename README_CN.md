@@ -180,7 +180,7 @@ priority        = ["pnpm", "npm", "yarn", "bun", "cargo"]
 
 | 什么 | 在哪 |
 | ---- | ---- |
-| 全局 | `<config-dir>/pmpx/config.toml` —— Linux `~/.config`、macOS `~/Library/Application Support`、Windows `%APPDATA%` |
+| 全局 | `<config-dir>/pmpx/config.toml` —— Linux `~/.config/pmpx`、macOS `~/Library/Application Support/pmpx`、Windows `%APPDATA%\pmpx\config` |
 | 插件 | 三个平台都是 `~/.pmpx/plugins/` |
 | 项目级 | `.pmpx.toml`，**可以有多份**，从 cwd 向上逐层收集 |
 

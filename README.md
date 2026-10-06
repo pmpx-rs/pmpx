@@ -192,7 +192,7 @@ of a two-tier score — **without a lockfile you genuinely cannot tell**. The wa
 
 | What | Where |
 | ---- | ----- |
-| Global | `<config-dir>/pmpx/config.toml` — Linux `~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%` |
+| Global | `<config-dir>/pmpx/config.toml` — Linux `~/.config/pmpx`, macOS `~/Library/Application Support/pmpx`, Windows `%APPDATA%\pmpx\config` |
 | Plugins | `~/.pmpx/plugins/` on all three platforms |
 | Per project | `.pmpx.toml`, **any number of them**, collected upwards from the cwd |
 
