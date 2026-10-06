@@ -1,6 +1,7 @@
 [package]
 name = "pmpx-testkit"
 description = "Test helpers for plugin authors: build the context a host would hand over, and capture what the plugin says."
+readme = "README.md"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true

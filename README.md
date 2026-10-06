@@ -134,6 +134,8 @@ Global flags:
 | `--no-walk-up` | only look at the current directory |
 | `-q, --quiet` | suppress the hints on stderr |
 | `--debug` | print debug information for this run |
+| `--json` | print the run as JSON on stdout, one object per line (see below) |
+| `--explain` | report how the backend was chosen, and run nothing |
 
 Other commands: `pmpx info`, `pmpx plugin ls|current|set|unset|add|rm|update|search|info`,
 `pmpx config get|set`, `pmpx completion <shell>`, `pmpx self update`.
@@ -160,6 +162,23 @@ pmpx exec <cmd...>
 
 So `pmpx exec ls` works with zero plugins installed. Every other verb reports an error
 instead — an explicit exception, not silent magic.
+
+### `--json`
+
+```console
+$ pmpx --json build | jq -c 'select(.event == "finished")'
+{"code":0,"event":"finished"}
+```
+
+One JSON object per line (JSONL) on **stdout**, so a program can read a run as it happens:
+`resolved`, `starting`, `finished`, `phase` (the engine's own timings), `warning`, `note`, `error`,
+`notes`, `plugin`. Everything meant for a person — including the backend's own output — goes to
+**stderr**, and that is what keeps the stream parseable: under `--json` the backend writes to stderr
+instead of stdout. Without the flag nothing changes — output stays live, colours stay, and
+`pmpx build > log` means what it always meant.
+
+`--json` covers the verbs that run something. A command whose result is a table (say `pmpx plugin
+ls`) refuses the flag and exits 2 rather than mixing prose into the stream.
 
 ## How it picks a backend
 

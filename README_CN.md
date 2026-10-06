@@ -123,6 +123,8 @@ $ pmpx run dev -- --port 3000
 | `--no-walk-up` | 只看当前目录，不向上找项目根 |
 | `-q, --quiet` | 关掉 stderr 上的提示 |
 | `--debug` | 打印调试信息 |
+| `--json` | 把这次运行按 JSON 输出到 stdout，每行一个对象（见下） |
+| `--explain` | 只报告后端是怎么选出来的，不执行任何东西 |
 
 其它命令：`pmpx info`、`pmpx plugin ls|current|set|unset|add|rm|update|search|info`、
 `pmpx config get|set`、`pmpx completion <shell>`、`pmpx self update`。
@@ -149,6 +151,22 @@ pmpx exec <cmd...>
 
 所以零插件下 `pmpx exec ls` 也能用。其余动词遇到不支持就报错 ——
 这是显式写入的例外，不是静默魔法。
+
+### `--json`
+
+```console
+$ pmpx --json build | jq -c 'select(.event == "finished")'
+{"code":0,"event":"finished"}
+```
+
+在 **stdout** 上每行一个 JSON 对象（JSONL），程序可以边跑边读：`resolved`、`starting`、
+`finished`、`phase`（引擎自己量的阶段耗时）、`warning`、`note`、`error`、`notes`、`plugin`。
+给人看的一切——**包括后端进程自己的输出**——都走 **stderr**，这才让这股流可解析；也就是说
+`--json` 同时意味着后端的输出改写到 stderr。不带这个参数时行为一字不变：输出照旧实时、
+颜色照旧、`pmpx build > log` 含义照旧。
+
+`--json` 覆盖的是会执行东西的那些动词。结果是表格的命令（比如 `pmpx plugin ls`）会明确拒绝
+这个参数并以退出码 2 结束，而不是把散文混进流里。
 
 ## 它怎么决定用哪个后端
 

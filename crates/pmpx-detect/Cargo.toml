@@ -1,6 +1,7 @@
 [package]
 name = "pmpx-detect"
 description = "Decides which installed plugin a project belongs to, from evidence that is already data."
+readme = "README.md"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true

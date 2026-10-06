@@ -1,6 +1,7 @@
 [package]
 name = "pmpx-loader"
 description = "Loads a pmpx plugin and calls it across the C ABI: the host side of the contract."
+readme = "README.md"
 version.workspace    = true
 edition.workspace    = true
 license.workspace    = true
