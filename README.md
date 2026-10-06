@@ -260,15 +260,45 @@ pmpx_plugin::export!(create);
 `export!` generates the whole C ABI shim — `catch_unwind`, string lifetimes, the vtable. A
 plugin author never sees any of it.
 
-**`command()` is a pure mapping.** Its inputs are the verb, the arguments, and the list of
-detect files that matched. It may not read files, write files, read the environment, or run
-processes — which is why shape decisions go through `Context::matched`:
+**`command()` is a pure mapping.** Its inputs are the verb, the arguments, and what the host knows
+about the call. It may not read files, write files, read the environment, or run processes — which
+is why shape decisions go through `Context::matched`:
 
 ```rust
 // Yarn classic and Berry spell this one verb differently, and the only evidence is a file.
 Verb::Update if ctx.has_matched(".yarnrc.yml") => Ok(CommandSpec::new("yarn").arg("up")),
 Verb::Update => Ok(CommandSpec::new("yarn").arg("upgrade")),
 ```
+
+When a *name* is not enough, a plugin declares what it wants to read **in its own manifest**, and the
+host reads exactly that and hands over the bytes — still without interpreting them:
+
+```toml
+[context]
+files = ["package.json", ".yarnrc.yml"]
+```
+
+```rust
+// The plugin parses it; pmpx never learns what is inside.
+if ctx.file_str("package.json").is_some_and(|s| s.contains("\"packageManager\"")) { … }
+```
+
+The context also carries what only the host knows: `start_dir` (where the person ran pmpx — the only
+way to tell which package of a monorepo this is, and **not** where the command will run), `reason`
+and `score` (why this plugin was picked), and `pins`, `scripts` and `config_files` (the project
+config as it was read).
+
+**A plugin explains itself through the host.** `pmpx_plugin::debug!` / `info!` / `warn!` /
+`error!` — and `debug::context()`, which prints the whole context on one line — reach pmpx, which
+adds the plugin's id and decides what to print:
+
+```
+pmpx debug: [pnpm] context: root=… start=… matched=[package.json pnpm-lock.yaml] verb=install …
+```
+
+That switch lives on the host side, so `--debug` never becomes an input a plugin could branch on: a
+debug run executes byte-for-byte the same command as any other. With no host — a plugin's own
+`cargo test` — the macros fall back to stderr, so the author still sees them.
 
 The contract crate is [`pmpx-plugin`](https://crates.io/crates/pmpx-plugin) —
 **zero dependencies**, MSRV 1.82.
@@ -283,7 +313,6 @@ The contract crate is [`pmpx-plugin`](https://crates.io/crates/pmpx-plugin) —
 | `crates/pmpx-plugin/` | the plugin contract: trait, C ABI, `export!` |
 | `crates/pmpx-plugin/tests/` | unit tests, ABI shim tests, and a real `dlopen` end-to-end |
 | `crates/pmpx/tests/` | end-to-end tests that run the built binary against a real `cdylib` plugin |
-| `docs/proposal.md` | design notes and the reasoning behind every choice |
 
 Each backend lives in its own repository (`pmpx-plugin-cargo`, `pmpx-plugin-pnpm`, …) and is
 published separately.

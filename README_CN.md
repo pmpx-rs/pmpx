@@ -244,7 +244,7 @@ pmpx_plugin::export!(create);
 
 `export!` 生成整个 C ABI 外壳 —— `catch_unwind`、字符串生命周期、vtable。插件作者看不到这些。
 
-**`command()` 是纯映射。** 输入只有动词、参数、以及命中的特征文件列表。它不许读文件、
+**`command()` 是纯映射。** 输入只有动词、参数、以及宿主知道的本次调用信息。它不许读文件、
 写文件、读环境变量、起进程 —— 所以形态判断走 `Context::matched`：
 
 ```rust
@@ -252,6 +252,33 @@ pmpx_plugin::export!(create);
 Verb::Update if ctx.has_matched(".yarnrc.yml") => Ok(CommandSpec::new("yarn").arg("up")),
 Verb::Update => Ok(CommandSpec::new("yarn").arg("upgrade")),
 ```
+
+光有文件名不够时，插件在**自己的 manifest 里声明**想读什么，宿主只读这些、把字节原样交过去，
+依旧不解释内容：
+
+```toml
+[context]
+files = ["package.json", ".yarnrc.yml"]
+```
+
+```rust
+// 解析是插件的事，pmpx 永远不知道里面是什么
+if ctx.file_str("package.json").is_some_and(|s| s.contains("\"packageManager\"")) { … }
+```
+
+上下文里还有只有宿主知道的部分：`start_dir`（用户在哪里敲的命令 —— monorepo 里这是判断"我在哪个包"
+的唯一线索，**不是**命令将在哪里执行）、`reason` 与 `score`（为什么选中这个插件）、以及
+`pins`、`scripts`、`config_files`（读到的项目配置）。
+
+**插件通过宿主说话。** `pmpx_plugin::debug!` / `info!` / `warn!` / `error!`，以及把整个上下文
+打成一行 `debug::context()` 都交给 pmpx 处理：宿主加上插件 ID，并决定打不打、打到哪一级：
+
+```
+pmpx debug: [pnpm] context: root=… start=… matched=[package.json pnpm-lock.yaml] verb=install …
+```
+
+开关在宿主手里，所以 `--debug` **不会**成为插件能拿到的输入：开不开 trace，执行的命令逐字节相同。
+没有宿主时（插件自己的 `cargo test`）宏回退到 stderr，作者照样看得到。
 
 契约 crate 是 [`pmpx-plugin`](https://crates.io/crates/pmpx-plugin) ——
 **零依赖**，MSRV 1.82。
@@ -266,7 +293,6 @@ Verb::Update => Ok(CommandSpec::new("yarn").arg("upgrade")),
 | `crates/pmpx-plugin/` | 插件契约：trait、C ABI、`export!` |
 | `crates/pmpx-plugin/tests/` | 单测、ABI 外壳测试，以及一次真的 `dlopen` 端到端 |
 | `crates/pmpx/tests/` | 端到端：真的跑构建出来的二进制，加载真的 `cdylib` 插件 |
-| `docs/proposal.md` | 设计说明与每个选择的理由 |
 
 每个后端住在自己的仓库里（`pmpx-plugin-cargo`、`pmpx-plugin-pnpm`……），独立发布。
 
