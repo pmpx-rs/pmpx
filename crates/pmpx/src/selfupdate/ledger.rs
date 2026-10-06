@@ -6,6 +6,7 @@
 //! be able to replace themselves.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 /// Whether this binary was put here by `cargo install`.
 ///
@@ -50,48 +51,88 @@ pub(super) enum CargoRecord {
 }
 
 pub(super) fn cargo_record(dir: &Path) -> CargoRecord {
-    let mut found = false;
+    let json = read_json_record(&dir.join(".crates2.json"));
+    let toml = read_toml_record(&dir.join(".crates.toml"));
 
-    // What current cargo writes: {"installs": {"pmpx 0.1.0 (registry+...)": {...}}}.
-    if let Ok(text) = fs::read_to_string(dir.join(".crates2.json")) {
-        found = true;
-        match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(json) => {
-                let lists = json
-                    .get("installs")
-                    .and_then(|value| value.as_object())
-                    .map(|installs| installs.keys().any(|key| names_this_crate(key)))
-                    .unwrap_or(false);
-                if lists {
-                    return CargoRecord::ListsCrate;
-                }
-            }
-            Err(_) => return CargoRecord::Unreadable,
-        }
+    // `ListsCrate` wins over everything: one of the two spellings naming this crate is proof.
+    if json == OneRecord::ThisCrate || toml == OneRecord::ThisCrate {
+        return CargoRecord::ListsCrate;
     }
 
-    // The older spelling of the same record.
-    if let Ok(text) = fs::read_to_string(dir.join(".crates.toml")) {
-        found = true;
-        match toml::from_str::<toml::Table>(&text) {
-            Ok(table) => {
-                let lists = table
-                    .get("v1")
-                    .and_then(|value| value.as_table())
-                    .map(|v1| v1.keys().any(|key| names_this_crate(key)))
-                    .unwrap_or(false);
-                if lists {
-                    return CargoRecord::ListsCrate;
-                }
-            }
-            Err(_) => return CargoRecord::Unreadable,
-        }
+    // A record that exists but cannot be read or understood is not evidence of absence. Treating
+    // it as "not cargo's" is the one mistake this module exists to prevent, so it counts as
+    // cargo's instead -- the conservative direction.
+    if json == OneRecord::Unreadable || toml == OneRecord::Unreadable {
+        return CargoRecord::Unreadable;
     }
 
-    if found {
-        CargoRecord::ListsSomethingElse
+    if json == OneRecord::OtherCrates || toml == OneRecord::OtherCrates {
+        return CargoRecord::ListsSomethingElse;
+    }
+
+    CargoRecord::Absent
+}
+
+/// What one of cargo's record files says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OneRecord {
+    /// The file is not there at all.
+    Missing,
+    /// It lists this crate.
+    ThisCrate,
+    /// It is readable and understood, and lists other crates.
+    OtherCrates,
+    /// It is there but cannot be read, parsed, or understood.
+    Unreadable,
+}
+
+/// What current cargo writes: `{"installs": {"pmpx 0.1.0 (registry+...)": {...}}}`.
+fn read_json_record(path: &Path) -> OneRecord {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return OneRecord::Missing,
+        // Permission denied, not UTF-8, a directory in the file's place: none of them prove the
+        // binary is not cargo's.
+        Err(_) => return OneRecord::Unreadable,
+    };
+
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return OneRecord::Unreadable;
+    };
+
+    // Valid JSON without the container cargo writes: a schema this pmpx does not know, which is
+    // again not proof of anything.
+    let Some(installs) = json.get("installs").and_then(|value| value.as_object()) else {
+        return OneRecord::Unreadable;
+    };
+
+    if installs.keys().any(|key| names_this_crate(key)) {
+        OneRecord::ThisCrate
     } else {
-        CargoRecord::Absent
+        OneRecord::OtherCrates
+    }
+}
+
+/// The older spelling of the same record.
+fn read_toml_record(path: &Path) -> OneRecord {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return OneRecord::Missing,
+        Err(_) => return OneRecord::Unreadable,
+    };
+
+    let Ok(table) = toml::from_str::<toml::Table>(&text) else {
+        return OneRecord::Unreadable;
+    };
+
+    let Some(v1) = table.get("v1").and_then(|value| value.as_table()) else {
+        return OneRecord::Unreadable;
+    };
+
+    if v1.keys().any(|key| names_this_crate(key)) {
+        OneRecord::ThisCrate
+    } else {
+        OneRecord::OtherCrates
     }
 }
 
@@ -195,5 +236,45 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
 
         assert_eq!(install_kind(&bin.join("pmpx")), InstallKind::Standalone);
+    }
+
+    /// A record that cannot even be read is not evidence that cargo does not own the binary --
+    /// concluding `Standalone` from it would overwrite an installation cargo manages.
+    #[test]
+    fn a_record_that_cannot_be_read_is_treated_as_cargos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        // Not valid UTF-8: `read_to_string` fails on it.
+        std::fs::write(tmp.path().join(".crates2.json"), [0xff, 0xfe, 0xfd]).unwrap();
+
+        assert_eq!(install_kind(&bin.join("pmpx")), InstallKind::Cargo);
+    }
+
+    /// The same for a record that parses but does not have the shape this pmpx knows: a schema
+    /// change in cargo must not silently hand the binary over.
+    #[test]
+    fn a_record_with_an_unknown_shape_is_treated_as_cargos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(
+            tmp.path().join(".crates2.json"),
+            r#"{"something_else":{"pmpx 0.1.0":{}}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(install_kind(&bin.join("pmpx")), InstallKind::Cargo);
+    }
+
+    /// An empty-looking `.crates.toml` (no `[v1]`) is the same case as above, one file over.
+    #[test]
+    fn a_toml_record_without_v1_is_treated_as_cargos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(tmp.path().join(".crates.toml"), "[other]\nx = 1\n").unwrap();
+
+        assert_eq!(install_kind(&bin.join("pmpx")), InstallKind::Cargo);
     }
 }
