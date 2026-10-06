@@ -73,9 +73,9 @@ jobs:
           pwsh -NoProfile -Command '$null = [scriptblock]::Create((Get-Content -Raw scripts/package-release.ps1))'
           echo "both packaging scripts parse"
 
-      # `pmpx-plugin` promises **zero dependencies**. This is its most important promise
-      # to this ecosystem: one more dependency for it is one more for every plugin author;
-      # raise its MSRV once and fewer people can write plugins.
+      # `pmpx-plugin` and `pmpx-plugin-abi` promise **zero dependencies**. This is the most
+      # important promise to this ecosystem: one more dependency for them is one more for every
+      # plugin author; raise their MSRV once and fewer people can write plugins.
       #
       # Without this gate, it is just a comment in Cargo.toml -- and "let me just pull in
       # once_cell" would go unnoticed.
@@ -83,19 +83,21 @@ jobs:
       # Only normal edges count: dev-dependencies (crate-plugin-kit, used by integration
       # tests) and build-dependencies **do not exist for plugin authors**, so they must not
       # count against this promise.
-      - name: pmpx-plugin must stay dependency-free
+      - name: the contract crates must stay dependency-free
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          deps=$(cargo tree -p pmpx-plugin -e normal --prefix none 2>/dev/null \
-            | awk '{print $1}' | sort -u | grep -vx 'pmpx-plugin' || true)
-          if [ -n "$deps" ]; then
-            echo "::error::pmpx-plugin promises zero dependencies, but the normal dependency tree contains:"
-            echo "$deps"
-            exit 1
-          fi
-          echo "pmpx-plugin has zero normal dependencies"
+          for crate in pmpx-plugin pmpx-plugin-abi; do
+            deps=$(cargo tree -p "$crate" -e normal --prefix none 2>/dev/null \
+              | awk '{print $1}' | sort -u | grep -vx "$crate" || true)
+            if [ -n "$deps" ]; then
+              echo "::error::$crate promises zero dependencies, but the normal dependency tree contains:"
+              echo "$deps"
+              exit 1
+            fi
+            echo "$crate has zero normal dependencies"
+          done
 
       # "Zero async runtime in the whole stack" is a promise written down in the README.
       # Without this gate it is just a sentence -- if some dependency casually drags tokio
@@ -124,7 +126,8 @@ jobs:
       # and it catches problems only the publish path exposes, such as a missing `version`
       # or an unpublished dependency.
       #
-      # `pmpx-plugin` has no registry dependencies, so it can be fully packaged + compiled.
+      # `pmpx-plugin` and `pmpx-plugin-abi` have no registry dependencies, so both can be fully
+      # packaged + compiled.
       #
       # `pmpx` cannot: it depends on the **published version** of `pmpx-plugin` (when
       # packaging, cargo strips `path` and keeps only the version number). Right after a
@@ -142,8 +145,36 @@ jobs:
           CARGO_TARGET_DIR: ${{ runner.temp }}/package-target
         run: |
           set -euo pipefail
+          cargo package -p pmpx-plugin-abi --locked
           cargo package -p pmpx-plugin --locked
           cargo package -p pmpx --list
+
+      # The ABI's two renderings are generated from the Rust definitions and committed, so that a
+      # change to the wire format cannot happen quietly: the snapshot has to be updated (and
+      # reviewed) in the same commit, and the C header has to agree with it.
+      #
+      # The header additionally carries `_Static_assert`s for every struct's size and every
+      # field's offset, so compiling it is what proves a C plugin and a Rust plugin read the same
+      # layout.
+      - name: The generated ABI files must be current
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          cargo run -p pmpx-plugin-abi --example gen-abi-files -- --check
+
+          cat > "$RUNNER_TEMP/abi-header.c" <<'EOF'
+          #include "pmpx_plugin.h"
+
+          int main(void) {
+              PmpxCommand command = { 0 };
+              command.size = sizeof(PmpxCommand);
+              return (int)(command.size == 0);
+          }
+          EOF
+
+          cc -std=c11 -Wall -Wextra -Werror -fsyntax-only \
+            -I crates/pmpx-plugin-abi/include "$RUNNER_TEMP/abi-header.c"
+          echo "the C header compiles and its layout assertions hold"
 
       # Workspace-internal dependencies must declare **both** `path` and `version`. With
       # only path it builds locally, but at publish time that dependency resolves to the

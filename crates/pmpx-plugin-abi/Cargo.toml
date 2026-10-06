@@ -1,0 +1,21 @@
+[package]
+name = "pmpx-plugin-abi"
+description = "The raw C ABI between pmpx and a plugin: #[repr(C)] data, keys and capabilities."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+# Same floor as `pmpx-plugin`, and for the same reason: this crate is what a plugin links
+# against, so its MSRV decides who can write a plugin. It is also dependency-free and
+# `no_std`, so nothing here can drag the floor up.
+rust-version = "1.82"
+keywords = ["plugin", "abi", "ffi", "cdylib"]
+categories = ["development-tools"]
+
+# Zero dependencies, deliberately: this is the layer that both sides of the `dlopen` boundary
+# compile against, and it is meant to be translatable to C by hand (see `include/`).
+[dependencies]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
