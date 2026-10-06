@@ -168,10 +168,18 @@ impl Backend {
         // Output direction: allocated by the plugin, freed by the plugin, read-only for the
         // host
         // ---------------------------------------------------------------
-        let mut out = std::mem::MaybeUninit::<PmpxCommand>::uninit();
+        // Start from a value the plugin has to overwrite. A plugin that answers `PMPX_OK` without
+        // filling `out` in then looks like "a command with no program", which this side can
+        // report -- instead of reading uninitialised memory.
+        let mut cmd = PmpxCommand {
+            program: PmpxStr::EMPTY,
+            args: std::ptr::null(),
+            args_len: 0,
+            cwd: PmpxStr::EMPTY,
+        };
 
         let code = {
-            let out_ptr = out.as_mut_ptr();
+            let out_ptr = &mut cmd as *mut PmpxCommand;
             // The fallback catch_unwind layer. The main defence is in the plugin-side
             // export! shell.
             abi::guard(move || {
@@ -215,8 +223,20 @@ impl Backend {
             }
         }
 
-        // SAFETY: on `PMPX_OK` the plugin guarantees it filled out.
-        let mut cmd = unsafe { out.assume_init() };
+        // `out` was filled in, but it is still data from the other side of a boundary this side
+        // does not control: `read_os` on a pointer-less length is undefined behaviour, and a
+        // garbage `args_len` is an out-of-bounds walk that `free_command` would repeat.
+        if let Some(why) = implausible(&cmd) {
+            // The argument array itself cannot be trusted, so it must not be handed back either:
+            // leaking it is the smaller mistake. Every other rejection is freed as agreed.
+            if why != Implausible::ArgsLen {
+                unsafe { (entry.free_command)(&mut cmd as *mut _) };
+            }
+            return Ok(Err(BackendError::Internal(format!(
+                "the command plugin {} produced cannot be used: {why}",
+                self.name
+            ))));
+        }
 
         // Copy this memory out, then give it back to the plugin as agreed -- the host stays
         // read-only throughout.
@@ -252,5 +272,171 @@ impl Backend {
             rustc_version: self.rustc_version(),
             target: self.target(),
         }
+    }
+}
+
+/// The largest argument list a plugin may report.
+///
+/// No command line can be longer than the OS allows, so a bigger number is a plugin bug -- and
+/// `args_len` is also what `free_command` walks, so it has to be checked before anything else
+/// touches the array.
+const MAX_COMMAND_ARGS: usize = 4096;
+
+/// Why a [`PmpxCommand`] a plugin just filled in cannot be used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Implausible {
+    /// More arguments than any command line could hold.
+    ArgsLen,
+    /// A length without a pointer, or nothing to run at all.
+    Shape(&'static str),
+}
+
+impl std::fmt::Display for Implausible {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Implausible::ArgsLen => {
+                write!(f, "it reported more than {MAX_COMMAND_ARGS} arguments")
+            }
+            Implausible::Shape(what) => f.write_str(what),
+        }
+    }
+}
+
+/// Whether a string the plugin returned can be read at all.
+///
+/// `len == 0` is the contract's "no string" and may carry a null pointer; a length without a
+/// pointer is not an empty string, it is a struct this side must not dereference.
+fn readable(s: PmpxStr) -> bool {
+    s.len == 0 || !s.ptr.is_null()
+}
+
+/// Check a command description before anything reads it.
+///
+/// The order matters: the argument count first, because it is both the one value that can make a
+/// later walk run off the end and the one that `free_command` would use.
+fn implausible(cmd: &PmpxCommand) -> Option<Implausible> {
+    if cmd.args_len > MAX_COMMAND_ARGS {
+        return Some(Implausible::ArgsLen);
+    }
+    if cmd.args_len > 0 && cmd.args.is_null() {
+        return Some(Implausible::Shape("it reported arguments with no array"));
+    }
+    if cmd.program.is_empty() {
+        return Some(Implausible::Shape("it reported a command with no program"));
+    }
+    if !readable(cmd.program) || !readable(cmd.cwd) {
+        return Some(Implausible::Shape(
+            "it reported a string with a length but no pointer",
+        ));
+    }
+
+    // SAFETY: `args` is non-null here and `args_len` is bounded, so the array the contract says
+    // the plugin allocated can be walked.
+    let bad_element = unsafe { (0..cmd.args_len).any(|i| !readable(*cmd.args.add(i))) };
+    if bad_element {
+        return Some(Implausible::Shape(
+            "it reported an argument with a length but no pointer",
+        ));
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `PmpxStr` over a literal that outlives the test's structs.
+    fn s(text: &'static str) -> PmpxStr {
+        PmpxStr {
+            ptr: text.as_ptr(),
+            len: text.len(),
+        }
+    }
+
+    fn command(program: PmpxStr, args: &[PmpxStr]) -> PmpxCommand {
+        PmpxCommand {
+            program,
+            args: args.as_ptr(),
+            args_len: args.len(),
+            cwd: PmpxStr::EMPTY,
+        }
+    }
+
+    #[test]
+    fn a_well_formed_command_passes() {
+        let args = [s("add"), s("serde")];
+        assert_eq!(implausible(&command(s("cargo"), &args)), None);
+    }
+
+    /// The "returned `PMPX_OK` without filling `out`" case: the host pre-fills the struct, so it
+    /// arrives here as an empty program rather than as uninitialised memory.
+    #[test]
+    fn a_command_with_no_program_is_refused() {
+        assert_eq!(
+            implausible(&command(PmpxStr::EMPTY, &[])),
+            Some(Implausible::Shape("it reported a command with no program"))
+        );
+    }
+
+    #[test]
+    fn an_absurd_argument_count_is_refused_before_the_array_is_touched() {
+        let cmd = PmpxCommand {
+            program: s("cargo"),
+            args: std::ptr::null(),
+            args_len: MAX_COMMAND_ARGS + 1,
+            cwd: PmpxStr::EMPTY,
+        };
+
+        // `ArgsLen` specifically: it is the one rejection that must not hand the array back.
+        assert_eq!(implausible(&cmd), Some(Implausible::ArgsLen));
+    }
+
+    #[test]
+    fn arguments_without_an_array_are_refused() {
+        let cmd = PmpxCommand {
+            program: s("cargo"),
+            args: std::ptr::null(),
+            args_len: 2,
+            cwd: PmpxStr::EMPTY,
+        };
+
+        assert_eq!(
+            implausible(&cmd),
+            Some(Implausible::Shape("it reported arguments with no array"))
+        );
+    }
+
+    #[test]
+    fn a_string_with_a_length_but_no_pointer_is_refused() {
+        let program = PmpxStr {
+            ptr: std::ptr::null(),
+            len: 5,
+        };
+
+        assert_eq!(
+            implausible(&command(program, &[])),
+            Some(Implausible::Shape(
+                "it reported a string with a length but no pointer"
+            ))
+        );
+    }
+
+    #[test]
+    fn an_argument_with_a_length_but_no_pointer_is_refused() {
+        let args = [
+            s("add"),
+            PmpxStr {
+                ptr: std::ptr::null(),
+                len: 3,
+            },
+        ];
+
+        assert_eq!(
+            implausible(&command(s("cargo"), &args)),
+            Some(Implausible::Shape(
+                "it reported an argument with a length but no pointer"
+            ))
+        );
     }
 }
