@@ -365,6 +365,28 @@ fn quiet_does_not_turn_the_trace_off() {
     );
 }
 
+/// The `pmpx -> <command>` announcement is the host's own framing of the resolution: it goes
+/// to stderr, names the resolved program, and survives both `--debug` and a plain run. The
+/// exact shape is the style module's responsibility; here we only assert that the line is
+/// there when it should be.
+#[test]
+fn the_resolved_command_is_announced_on_stderr() {
+    let (sb, _lib) = sandbox_with_plugin();
+    sb.file("fakepm.lock");
+
+    let out = sb.run(&["test", "--", "--nocapture"]);
+    assert!(out.status.success(), "{}", stderr_of(&out));
+
+    let err = stderr_of(&out);
+    assert!(
+        err.contains("pmpx ->"),
+        "the announcement line should reach the terminal: {err}"
+    );
+    // The fake plugin maps every verb to `pmpx-probe`, so the resolved program is what the
+    // plugin returned, not what the user typed. Both halves of the announcement still appear.
+    assert!(err.contains("pmpx-probe"), "{err}");
+}
+
 /// A plugin's own `debug!` arrives through the host: the host adds the plugin's id, and the line
 /// only appears when a trace was asked for -- which is what keeps `--debug` from being an input
 /// the plugin could branch on, and keeps a plugin's notes out of a normal run entirely.

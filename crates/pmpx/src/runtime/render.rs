@@ -79,7 +79,9 @@ pub fn render(plugin: &str, event: Event) -> Rendered {
             Rendered::Shown
         }
 
-        // The execution events are rendered where the run is, by `spawn::run`'s own sink.
+        // The execution events are rendered by [`crate::app::Sink`]: the resolved command is
+        // announced as `pmpx -> <command>` before the run, and the finished event is part of
+        // the sink's bookkeeping. JSON mode still gets each event as its own object.
         Event::Resolved { .. } | Event::Starting { .. } | Event::Finished { .. } => {
             Rendered::NotShown
         }

@@ -121,7 +121,7 @@ $ pmpx run dev -- --port 3000
 | `-p, --plugin <name>` | 指定插件，**压过 `.pmpx.toml`** |
 | `-C, --dir <path>` | 在指定目录操作 |
 | `--no-walk-up` | 只看当前目录，不向上找项目根 |
-| `-q, --quiet` | 关掉 stderr 上的提示 |
+| `-q, --quiet` | 关掉 stderr 上的提示和解析到的命令 |
 | `--debug` | 打印调试信息 |
 | `--json` | 把这次运行按 JSON 输出到 stdout，每行一个对象（见下） |
 | `--explain` | 只报告后端是怎么选出来的，不执行任何东西 |

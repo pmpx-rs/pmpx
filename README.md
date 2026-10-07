@@ -132,7 +132,7 @@ Global flags:
 | `-p, --plugin <name>` | use this plugin, **overriding `.pmpx.toml`** |
 | `-C, --dir <path>` | operate in this directory |
 | `--no-walk-up` | only look at the current directory |
-| `-q, --quiet` | suppress the hints on stderr |
+| `-q, --quiet` | suppress the hints and the resolved command on stderr |
 | `--debug` | print debug information for this run |
 | `--json` | print the run as JSON on stdout, one object per line (see below) |
 | `--explain` | report how the backend was chosen, and run nothing |

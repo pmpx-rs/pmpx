@@ -38,23 +38,27 @@ pub fn options(args: &Cli) -> Options {
 
 /// Open a session, showing the setup phases in the trace.
 pub fn session(args: &Cli) -> crate::error::Result<Session> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(args.quiet);
     Session::open(options(args), &mut |event| sink.handle(event)).map_err(PmpxError::from)
 }
 
 /// The engine's events, as this host shows them.
 ///
 /// It remembers which plugin the run selected, because the plugin's own lines arrive without a name and
-/// the name is what makes them readable.
+/// the name is what makes them readable. The `--quiet` flag lives here too: the announcement at the
+/// start of a run is the host's own presentation, and quiet is the host's own decision to keep it.
 pub struct Sink {
     plugin: String,
+    quiet: bool,
 }
 
 impl Sink {
-    /// A sink that does not know the plugin yet.
-    pub fn new() -> Self {
+    /// A sink that does not know the plugin yet. `quiet` is forwarded to the rendering rules:
+    /// `--quiet` suppresses the `pmpx -> <command>` announcement and the selection's notes.
+    pub fn new(quiet: bool) -> Self {
         Self {
             plugin: String::new(),
+            quiet,
         }
     }
 
@@ -63,13 +67,25 @@ impl Sink {
         if let Event::Notes { plugin, .. } = &event {
             self.plugin.clone_from(plugin);
         }
-        crate::runtime::render_event(&self.plugin, event);
-    }
-}
 
-impl Default for Sink {
-    fn default() -> Self {
-        Self::new()
+        // The "pmpx -> <command>" announcement is the host's own framing, not part of the
+        // engine's event rendering. JSON mode keeps stdout for machine-readable events, so
+        // this only reaches the terminal in the human path. `--quiet` turns it off: it is the
+        // "resolved command" the cli docs say quiet suppresses.
+        if let Event::Starting { plan } = &event {
+            if !self.quiet && !crate::runtime::is_json() {
+                anstream::eprintln!("{}", crate::style::announce_starting(plan));
+            }
+        }
+
+        // The selection's notes (ambiguous detection, uninstalled candidates) belong on stderr,
+        // and `--quiet` is what hides them. The JSON path is unaffected: `notes` is its own
+        // event and a script that wants them gets them either way.
+        if self.quiet && matches!(event, Event::Notes { .. }) {
+            return;
+        }
+
+        crate::runtime::render_event(&self.plugin, event);
     }
 }
 
@@ -78,7 +94,7 @@ pub fn select(
     session: &Session,
     root: &Path,
 ) -> std::result::Result<Selection, crate::error::PmpxError> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     session
         .select(root, &mut |event| sink.handle(event))
         .map_err(|failure| PmpxError::from(pmpx_engine::EngineError::Detect(failure)))
@@ -90,7 +106,7 @@ pub fn select_from(
     root: &Path,
     families: &BTreeMap<String, FamilyScore>,
 ) -> std::result::Result<Selection, crate::error::PmpxError> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     session
         .select_from(root, families, &mut |event| sink.handle(event))
         .map_err(|failure| PmpxError::from(pmpx_engine::EngineError::Detect(failure)))
@@ -98,7 +114,7 @@ pub fn select_from(
 
 /// Score every installed plugin, for a command that wants the whole table (`info`, `plugin ls`).
 pub fn score_all(session: &Session, root: &Path) -> BTreeMap<String, FamilyScore> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     pmpx_engine::detect::score_all(&session.plugins, root, &session.project, &mut |event| {
         sink.handle(event)
     })
@@ -106,7 +122,7 @@ pub fn score_all(session: &Session, root: &Path) -> BTreeMap<String, FamilyScore
 
 /// Load the selected plugin.
 pub fn load_backend(session: &Session, selection: &Selection) -> crate::error::Result<Backend> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     session
         .load_backend(selection, &mut |event| sink.handle(event))
         .map_err(PmpxError::from)
@@ -114,7 +130,7 @@ pub fn load_backend(session: &Session, selection: &Selection) -> crate::error::R
 
 /// Load one installed plugin, for a command that inspects plugins rather than running one.
 pub fn load_plugin(session: &Session, plugin: &InstalledPlugin) -> crate::error::Result<Backend> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     session
         .load_plugin(plugin, &mut |event| sink.handle(event))
         .map_err(PmpxError::from)
@@ -122,12 +138,11 @@ pub fn load_plugin(session: &Session, plugin: &InstalledPlugin) -> crate::error:
 
 /// Show the notes a resolution produced. `--quiet` turns them off.
 pub fn emit_notes(session: &Session, selection: &Selection) {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     sink.handle(Event::Notes {
         plugin: selection.name.clone(),
         notes: selection.notes.clone(),
     });
-    let _ = session;
 }
 
 /// Run one verb all the way.
@@ -137,7 +152,7 @@ pub fn run_verb(
     args: &[OsString],
     allow_exec_fallback: bool,
 ) -> crate::error::Result<u8> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     pmpx_engine::run_verb(session, verb, args, allow_exec_fallback, &mut |event| {
         sink.handle(event)
     })
@@ -150,7 +165,7 @@ pub fn run_script(
     name: &str,
     extra: &[OsString],
 ) -> Option<crate::error::Result<u8>> {
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(session.quiet);
     pmpx_engine::run_script(session, name, extra, &mut |event| sink.handle(event))
         .map(|result| result.map_err(PmpxError::from))
 }
@@ -164,7 +179,7 @@ pub fn explain(args: &Cli) -> crate::error::Result<u8> {
     // The setup phases are a separate concern: unless `--debug` asked for them, they stay out of the
     // report, so `--explain --json` is exactly one object.
     let trace = debug::enabled();
-    let mut sink = Sink::new();
+    let mut sink = Sink::new(args.quiet);
     let session = Session::open(options(args), &mut |event| {
         if trace {
             sink.handle(event);
