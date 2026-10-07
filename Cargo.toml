@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version    = "0.3.1"
+version    = "0.3.2"
 edition    = "2021"
 license    = "MIT"
 repository = "https://github.com/pmpx-rs/pmpx"
@@ -15,28 +15,28 @@ rust-version = "1.88"
 [workspace.dependencies]
 # Both path and version: at publish time the path is stripped and only the version remains,
 # so version is mandatory, and it must match [workspace.package] version exactly.
-pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.3.1" }
+pmpx-plugin = { path = "crates/pmpx-plugin", version = "0.3.2" }
 
 # The raw ABI layer: `#[repr(C)]` data, keys and capabilities. Shared by the plugin shell, the host
 # loader and (later) the plugin-author test kit. `features = ["std"]` is added where it is wanted,
 # so the crate's own default stays `no_std`.
-pmpx-plugin-abi = { path = "crates/pmpx-plugin-abi", version = "0.3.1" }
+pmpx-plugin-abi = { path = "crates/pmpx-plugin-abi", version = "0.3.2" }
 
 # The host side of the ABI: negotiation, calling, and the typed context. This is the only place the
 # two sides meet, so the CLI itself never sees a pointer.
-pmpx-loader = { path = "crates/pmpx-loader", version = "0.3.1" }
+pmpx-loader = { path = "crates/pmpx-loader", version = "0.3.2" }
 
 # The decision: scoring and resolution, on data. Zero dependencies, no filesystem, no printing.
-pmpx-detect = { path = "crates/pmpx-detect", version = "0.3.1" }
+pmpx-detect = { path = "crates/pmpx-detect", version = "0.3.2" }
 
 # pmpx's own configuration files: reading, layering, writing.
-pmpx-project = { path = "crates/pmpx-project", version = "0.3.1" }
+pmpx-project = { path = "crates/pmpx-project", version = "0.3.2" }
 
 # Executing what a plugin answers: resolution, spawning, exit codes, and the events of a run.
-pmpx-engine = { path = "crates/pmpx-engine", version = "0.3.1" }
+pmpx-engine = { path = "crates/pmpx-engine", version = "0.3.2" }
 
 # What a plugin author's tests need: a context, a fixture directory, and a fake host.
-pmpx-testkit = { path = "crates/pmpx-testkit", version = "0.3.1" }
+pmpx-testkit = { path = "crates/pmpx-testkit", version = "0.3.2" }
 
 # General plugin management library. An external dependency, consumed by version, not by path.
 crate-plugin-kit = "0.3.2"

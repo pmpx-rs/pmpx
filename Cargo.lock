@@ -421,7 +421,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pmpx"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anstream",
  "anstyle",
@@ -450,11 +450,11 @@ dependencies = [
 
 [[package]]
 name = "pmpx-detect"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "pmpx-engine"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "crate-plugin-kit",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "pmpx-loader"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "libloading",
  "pmpx-plugin-abi",
@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "pmpx-plugin"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "pmpx-loader",
  "pmpx-plugin-abi",
@@ -487,11 +487,11 @@ dependencies = [
 
 [[package]]
 name = "pmpx-plugin-abi"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "pmpx-project"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "directories",
@@ -502,7 +502,7 @@ dependencies = [
 
 [[package]]
 name = "pmpx-testkit"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "pmpx-detect",
  "pmpx-plugin",
